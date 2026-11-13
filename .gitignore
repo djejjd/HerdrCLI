@@ -1,0 +1,5 @@
+docs/quality/
+node_modules/
+.tmp/
+# gpui-kit 生成的类型声明（各 ~800KB），按需重建，不入库
+mods/*/gpui-kit.d.ts

@@ -1,3 +1,8 @@
+状态: active
+创建: 2026-11-13
+最后更新: 2026-11-13
+关联: docs/rules.md; docs/plans/README.md
+
 # 项目名 · AI 入口
 本文件是唯一自动加载的入口。只放：红线、开工协议、索引、写入规则；不写架构与业务细节（属于 docs/）。
 
@@ -23,6 +28,9 @@
 2. 读 `docs/adr/` 最近 3 条标题
 3. 只读 1 篇结构文档：`docs/architecture/` 首篇；没有则读 `docs/README.md`
 4. 再动手
+
+## 多 Agent 协作入口
+- 开工前读全局真源 `~/ai/rules.md` §6「协作闭环」（A-01~A-07）；开发 Agent 与监督 Agent 均须遵守，本项目不重复细则。
 
 ## 索引
 - 规则 → `docs/rules.md`；进度 → `docs/plans/README.md`
