@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# 由 ai-init 生成：提交了代码但没动 docs/plans/README.md 时提醒一行。
+# 不阻断提交（exit 0），只是让「收尾」这件事被看见。
+set -e
+staged=$(git diff --cached --name-only)
+code=$(printf '%s\n' "$staged" | grep -vE '^(docs/|\.githooks/)' | grep -c . || true)
+plans_touched=$(printf '%s\n' "$staged" | grep -c '^docs/plans/' || true)
+if [ "${code:-0}" -gt 0 ] && [ "${plans_touched:-0}" -eq 0 ]; then
+  echo "提示：本次改了代码但没更新 docs/plans/README.md（当前阶段/下一步）。"
+  echo "     若确实不需要更新，忽略即可；这行提醒不会阻断提交。"
+fi
+exit 0
