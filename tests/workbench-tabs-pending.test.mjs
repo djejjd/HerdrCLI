@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
   splitRow, parseLedger, rowKey, countRows, ageText, classifyTarget, chipState, PendingStore, fixturePath, listPlan,
   ledgerSignature, pickState, rowsForSpace, pickApprovalsPane, chipNode, globalCount,
-  filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, cleanupPlan, cleanupLogLine, retryPlan, cleanupFailureLine, rowActions, decisionEvent, chipLabel,
+  filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, cleanupPlan, cleanupLogLine, spacePlan, retryPlan, cleanupFailureLine, rowActions, decisionEvent, chipLabel,
 } from '../mods/workbench-tabs/pending.js';
 
 const HEAD = '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |';
@@ -540,18 +540,21 @@ test('filterVisibleTabs：隐藏 settled，保持顺序', () => {
   assert.deepEqual(filterVisibleTabs(null), []);
 });
 
-test('ensurePlan：无待批→create；有一个→exists；多个→收编第一个', () => {
-  assert.deepEqual(ensurePlan([{ id: 'a', name: '1' }]), { kind: 'create' });
-  const one = ensurePlan([{ id: 'a', name: '1' }, { id: 'b', name: '待批', settled: true }]);
+test('ensurePlan：只认本 mod pane；多个收编第一个；pane 未知则等', () => {
+  const P = id => ({ pane: 'p' + id, tab: id, mod: 'workbench-tabs' });
+  assert.deepEqual(ensurePlan([{ id: 'a', name: '1' }], []), { kind: 'create' });
+  const one = ensurePlan([{ id: 'a', name: '1' }, { id: 'b', name: '待批', settled: true }], [P('b')]);
   assert.equal(one.kind, 'exists');
   assert.equal(one.tab, 'b');
-  const multi = ensurePlan([{ id: 'b', name: '待批' }, { id: 'c', name: '待批' }]);
+  const multi = ensurePlan([{ id: 'b', name: '待批' }, { id: 'c', name: '待批' }], [P('b'), P('c')]);
   assert.equal(multi.kind, 'exists');
   assert.equal(multi.tab, 'b');
   assert.equal(multi.extras, 1);
-  assert.deepEqual(ensurePlan([]), { kind: 'create' });
+  // 同名但 pane 未知：不建，等下轮
+  assert.equal(ensurePlan([{ id: 'b', name: '待批' }], []).kind, 'wait');
+  // 同名但 pane 是 shell：不算我们的，也不建（等清理/人工）
+  assert.equal(ensurePlan([{ id: 'b', name: '待批' }], [{ pane: 'p', tab: 'b', mod: 'shell' }]).kind, 'wait');
 });
-
 test('settlePlan：0+非激活收起；0+激活只提示；>0 不收起', () => {
   assert.equal(settlePlan({ count: 0, active: false }), 'settle');
   assert.equal(settlePlan({ count: 0, active: true }), 'banner');
@@ -559,14 +562,14 @@ test('settlePlan：0+非激活收起；0+激活只提示；>0 不收起', () => 
   assert.equal(settlePlan({ count: 1, active: true }), 'keep');
 });
 
-test('chipTarget：只找已有标签，绝不新建；连续 5 次结果稳定', () => {
+test('chipTarget：只认本 mod pane，名字不算数；连续 5 次稳定', () => {
   const tabs = [{ id: 'm' }, { id: 'tb1', name: '待批', settled: true }];
-  for (let i = 0; i < 5; i += 1) assert.equal(chipTarget({ panes: [], tabs }), 'tb1');
+  const panes = [{ pane: 'p1', tab: 'tb1', mod: 'workbench-tabs' }];
+  for (let i = 0; i < 5; i += 1) assert.equal(chipTarget({ panes, tabs }), 'tb1');
+  // 只有名字、没有 pane：不认
+  assert.equal(chipTarget({ panes: [], tabs }), null);
   assert.equal(chipTarget({ panes: [], tabs: [{ id: 'm' }] }), null);
-  assert.equal(chipTarget({ panes: [], tabs: [] }), null);
 });
-
-
 test('ensure 创建参数：focus:false，不抢当前视图', () => {
   const a = createArgs();
   assert.equal(a.focus, false);
@@ -613,40 +616,37 @@ test('两次创建都抛错：creating 复位、createError 非空、日志行�
 const TT = (id, extra = {}) => ({ id, name: '待批', ...extra });
 const PP = (tab, mod = 'workbench-tabs') => ({ pane: `p-${tab}`, tab, mod });
 
-test('cleanupPlan：0/1/2/4 个、active 优先、唯一标签只 settle', () => {
+test('cleanupPlan：keep 最早、active 重复项先切 keep、唯一标签按 count 决定', () => {
+  const P = id => ({ pane: 'p' + id, tab: id, mod: 'workbench-tabs' });
   // 0 个
-  assert.deepEqual(cleanupPlan([{ id: 'a', name: '1' }], []), { keep: null, close: [], settle: [], select: [] });
-  // 1 个且有别的标签
-  assert.deepEqual(cleanupPlan([TT('a'), { id: 'b', name: '2' }], [PP('a')]), { keep: 'a', close: [], settle: [], select: [] });
-  // 1 个且是唯一标签 -> settle
-  assert.deepEqual(cleanupPlan([TT('a')], [PP('a')]), { keep: 'a', close: [], settle: ['a'], select: [] });
-  // 2 个：keep 永远是最早的 a
-  assert.deepEqual(cleanupPlan([TT('a', { settled: true }), TT('b'), { id: 'z', name: '1' }], [PP('a'), PP('b')]),
+  assert.deepEqual(cleanupPlan([{ id: 'a', name: '1' }], [], 0), { keep: null, close: [], settle: [], select: [] });
+  // 1 个且有别的标签：不动作
+  assert.deepEqual(cleanupPlan([TT('a'), { id: 'b', name: '2' }], [PP('a')], 1), { keep: 'a', close: [], settle: [], select: [] });
+  // 唯一标签 + 0 条 + 非激活 -> settle
+  assert.deepEqual(cleanupPlan([TT('a')], [PP('a')], 0), { keep: 'a', close: [], settle: ['a'], select: [] });
+  // 唯一标签 + 0 条 + 激活 -> 不 settle
+  assert.deepEqual(cleanupPlan([TT('a', { active: true })], [PP('a')], 0), { keep: 'a', close: [], settle: [], select: [] });
+  // 唯一标签 + 有数 -> 不 settle
+  assert.deepEqual(cleanupPlan([TT('a')], [PP('a')], 2), { keep: 'a', close: [], settle: [], select: [] });
+  // 2 个：keep 最早
+  assert.deepEqual(cleanupPlan([TT('a', { settled: true }), TT('b'), { id: 'z', name: '1' }], [PP('a'), PP('b')], 1),
     { keep: 'a', close: ['b'], settle: [], select: [] });
-  // b active 且是重复项：keep 仍是 a，先 select a 再关 b
-  assert.deepEqual(cleanupPlan([TT('a'), TT('b', { active: true }), { id: 'z', name: '1' }], [PP('a'), PP('b')]),
+  // b active 且是重复项：先 select keep 再关
+  assert.deepEqual(cleanupPlan([TT('a'), TT('b', { active: true }), { id: 'z', name: '1' }], [PP('a'), PP('b')], 1),
     { keep: 'a', close: ['b'], settle: [], select: ['a'] });
-  // 4 个：keep 最早 a，其余 close
+  // 4 个：keep 最早
   assert.deepEqual(cleanupPlan([TT('a', { settled: true }), TT('b'), TT('c'), TT('d'), { id: 'e', name: 'x' }],
-    [PP('a'), PP('b'), PP('c'), PP('d')]),
+    [PP('a'), PP('b'), PP('c'), PP('d')], 1),
     { keep: 'a', close: ['b', 'c', 'd'], settle: [], select: [] });
-  // 4 个且 c active：keep 仍是 a，select a 再关 c
-  assert.deepEqual(cleanupPlan([TT('a', { settled: true }), TT('b'), TT('c', { active: true }), TT('d'), { id: 'e', name: 'x' }],
-    [PP('a'), PP('b'), PP('c'), PP('d')]),
-    { keep: 'a', close: ['b', 'c', 'd'], settle: [], select: ['a'] });
 });
-
-test('cleanupPlan：名字像但 pane 不是我们的 mod -> 不 close，只 settle', () => {
-  // 用户自建同名终端标签
-  assert.deepEqual(cleanupPlan([TT('a'), { id: 'u', name: '待批' }], [PP('a'), { pane: 'p-u', tab: 'u', mod: 'shell' }]),
-    { keep: 'a', close: [], settle: ['u'], select: [] });
-  // pane 信息缺失 -> 不 close
-  assert.deepEqual(cleanupPlan([TT('a'), TT('b')], [PP('a')]), { keep: 'a', close: [], settle: ['b'], select: [] });
-  // 幂等：只剩 keep 且有别的标签 -> 无动作
-  assert.deepEqual(cleanupPlan([TT('a'), { id: 'e', name: 'x' }], [PP('a')]), { keep: 'a', close: [], settle: [], select: [] });
+test('cleanupPlan：同名但 pane 不是本 mod 或缺失 -> 完全不动作', () => {
+  const P = id => ({ pane: 'p' + id, tab: id, mod: 'workbench-tabs' });
+  // 用户自建同名终端标签：不关也不收
+  assert.deepEqual(cleanupPlan([TT('a'), { id: 'u', name: '待批' }], [P('a'), { pane: 'p-u', tab: 'u', mod: 'shell' }], 1),
+    { keep: 'a', close: [], settle: [], select: [] });
+  // pane 信息缺失的同名标签：不动作
+  assert.deepEqual(cleanupPlan([TT('a'), TT('b')], [P('a')], 1), { keep: 'a', close: [], settle: [], select: [] });
 });
-
-
 test('清理日志行：含 keep、closed id 列表、settled 数', () => {
   const line = cleanupLogLine({ spaceId: 'sp1', plan: { keep: 'k', close: ['a', 'b'], settle: ['c'] }, now: 1700000000000 });
   assert.match(line, /space=sp1/);
@@ -687,4 +687,36 @@ test('失败日志行：含 action/id/错误首行，不含正文', () => {
   assert.match(line, /id=tb1/);
   assert.match(line, /no tab/);
   assert.equal(line.includes('决定是否合并'), false);
+});
+
+
+test('settlePlan：有数且已收起 -> unsettle；有数未收起 -> keep', () => {
+  assert.equal(settlePlan({ count: 2, active: false, settled: true }), 'unsettle');
+  assert.equal(settlePlan({ count: 2, active: false, settled: false }), 'keep');
+  assert.equal(settlePlan({ count: 0, active: true, settled: false }), 'banner');
+  assert.equal(settlePlan({ count: 0, active: false, settled: true }), 'settle');
+});
+
+test('decisionEvent：正文里的｜与换行被替换', () => {
+  const msg = decisionEvent({ what: '甲｜乙\n丙', project: 'P｜Q', type: '授权' }, 'approve', 1700000000000);
+  const parts = msg.split('｜');
+  assert.equal(parts.length, 7, '字段数不被正文里的竖线撑开');
+  assert.equal(parts[5].includes('\n'), false);
+  assert.equal(parts[6].includes('｜'), false);
+});
+
+
+test('spacePlan：只有当前 Space 新建；有数收起则展；0 条非激活收起', () => {
+  const P = id => ({ pane: 'p' + id, tab: id, mod: 'workbench-tabs' });
+  const empty = spacePlan({ tabs: [{ id: 'm', name: '1' }], panes: [], count: 0, isActive: true });
+  assert.equal(empty.ensure, 'create');
+  const inactive = spacePlan({ tabs: [{ id: 'm', name: '1' }], panes: [], count: 0, isActive: false });
+  assert.equal(inactive.ensure, 'none');
+  const folded = spacePlan({ tabs: [{ id: 'b', name: '待批', settled: true }, { id: 'm' }], panes: [P('b')], count: 2, isActive: true });
+  assert.deepEqual(folded.unsettle, ['b']);
+  assert.deepEqual(folded.settle, []);
+  const zeroIdle = spacePlan({ tabs: [{ id: 'b', name: '待批' }, { id: 'm' }], panes: [P('b')], count: 0, isActive: true });
+  assert.deepEqual(zeroIdle.settle, ['b']);
+  const zeroActive = spacePlan({ tabs: [{ id: 'b', name: '待批', active: true }, { id: 'm' }], panes: [P('b')], count: 0, isActive: true });
+  assert.deepEqual(zeroActive.settle, []);
 });

@@ -334,8 +334,9 @@ export function decisionEvent(row, decision, now = Date.now()) {
     text = `选其它:${n}`;
   }
   const at = new Date(now).toISOString();
-  const title = String(row?.what ?? '').slice(0, 80);
-  return `PENDING-DECISION｜${key}｜${type}｜${text}｜${at}｜${title}｜${row?.project ?? ''}`;
+  const clean = v => String(v ?? '').replace(/[｜\n\r]/g, ' ').slice(0, 120);
+  const title = clean(row?.what).slice(0, 80);
+  return `PENDING-DECISION｜${key}｜${type}｜${text}｜${at}｜${title}｜${clean(row?.project)}`;
 }
 
 
@@ -356,26 +357,29 @@ export function filterVisibleTabs(tabs) {
   return (Array.isArray(tabs) ? tabs : []).filter(t => t && !t.settled);
 }
 
-/** 每个 Space 的固定待批标签：没有→create；有（可能多个）→收编第一个，其余不动。 */
-export function ensurePlan(tabs) {
-  const pending = (Array.isArray(tabs) ? tabs : []).filter(t => t && t.name === '待批');
-  if (!pending.length) return { kind: 'create' };
-  return { kind: 'exists', tab: pending[0].id, extras: pending.length - 1 };
+/** 每个 Space 一个待批标签：本 mod pane 且名为「待批」才算；pane 未知时不动作。 */
+export function ensurePlan(tabs, panes) {
+  const all = Array.isArray(tabs) ? tabs : [];
+  const list = Array.isArray(panes) ? panes : [];
+  const paneOf = id => list.find(p => p && p.tab === id);
+  const named = all.filter(t => t && t.name === '待批');
+  const ours = named.filter(t => paneOf(t.id)?.mod === 'workbench-tabs');
+  if (ours.length) return { kind: 'exists', tab: ours[0].id, extras: ours.length - 1 };
+  if (named.length) return { kind: 'wait' };
+  return { kind: 'create' };
 }
 
-/** 0 条：非激活收起，激活只提示；>0 不收起。 */
-export function settlePlan({ count, active } = {}) {
-  if (Number(count) > 0) return 'keep';
+/** 0 条：非激活收起、激活只提示；>0：已收起则展开，否则保持。 */
+export function settlePlan({ count, active, settled } = {}) {
+  if (Number(count) > 0) return settled ? 'unsettle' : 'keep';
   return active ? 'banner' : 'settle';
 }
 
-/** chip 点击目标：只找已有待批标签（pane 或名字），找不到返回 null；绝不新建。 */
+/** chip 点击目标：只认 pane.mod 是本 mod 的待批标签；不做名字兜底。 */
 export function chipTarget({ panes, tabs } = {}) {
   const ids = new Set((Array.isArray(tabs) ? tabs : []).map(t => t && t.id));
   const hit = (Array.isArray(panes) ? panes : []).find(p => p && p.mod === 'workbench-tabs' && ids.has(p.tab));
-  if (hit) return hit.tab;
-  const named = (Array.isArray(tabs) ? tabs : []).find(t => t && t.name === '待批');
-  return named ? named.id : null;
+  return hit ? hit.tab : null;
 }
 
 /** 新建待批标签的参数：focus:false，绝不抢当前视图。 */
@@ -398,23 +402,20 @@ export function createFailure({ spaceId, error, now = Date.now() } = {}) {
   };
 }
 
-/** 遗留待批标签清理：每个 Space 只留一个；其余只关“确认是我们的”（pane.mod 匹配），
- *  拿不到 pane 或 mod 不匹配时只 settle 不 close。keep 若是该 Space 唯一标签则 settle。 */
-export function cleanupPlan(tabs, panes) {
+/** 清理：只处理「名为待批 + pane.mod 是本 mod」的标签；keep 取最早；active 重复项先切 keep。
+ *  唯一标签只有在 count===0 且非激活时才收起。pane 未知的同名标签不动作。 */
+export function cleanupPlan(tabs, panes, count) {
   const all = Array.isArray(tabs) ? tabs : [];
-  const pending = all.filter(t => t && t.name === '待批');
-  if (!pending.length) return { keep: null, close: [], settle: [], select: [] };
-  const paneOf = id => (Array.isArray(panes) ? panes : []).find(p => p && p.tab === id);
-  const ours = t => paneOf(t.id)?.mod === 'workbench-tabs';
-  // keep 永远取最早出现的待批标签，id 稳定，不随 active 变化。
-  const keepTab = pending[0];
-  const others = pending.filter(t => t !== keepTab);
-  const close = others.filter(ours).map(t => t.id);
-  const settle = others.filter(t => !ours(t)).map(t => t.id);
-  // active 的重复项要被关：先切到 keep，再关它，避免用户留在被关标签上。
-  const activeDup = others.some(t => t.active && ours(t));
-  const select = activeDup ? [keepTab.id] : [];
-  if (all.length === 1 && !keepTab.settled) settle.push(keepTab.id);
+  const list = Array.isArray(panes) ? panes : [];
+  const paneOf = id => list.find(p => p && p.tab === id);
+  const ours = all.filter(t => t && t.name === '待批' && paneOf(t.id)?.mod === 'workbench-tabs');
+  if (!ours.length) return { keep: null, close: [], settle: [], select: [] };
+  const keepTab = ours[0];
+  const others = ours.slice(1);
+  const close = others.map(t => t.id);
+  const select = others.some(t => t.active) ? [keepTab.id] : [];
+  const settle = [];
+  if (all.length === 1 && Number(count) === 0 && !keepTab.active && !keepTab.settled) settle.push(keepTab.id);
   return { keep: keepTab.id, close, settle, select };
 }
 
@@ -435,4 +436,21 @@ export function retryPlan({ tries = 0, lastAt = 0, now = Date.now(), max = 2, ga
 export function cleanupFailureLine({ action, id, error, now = Date.now() } = {}) {
   const msg = String(error?.message ?? error ?? 'unknown').split('\n')[0].slice(0, 100);
   return `${new Date(now).toISOString()} action=${action ?? '?'} id=${id ?? '?'} error=${msg}`;
+}
+
+/** 一个 Space 的轮询决策（纯函数）：是否新建、收起/展开哪些、清理计划。
+ *  只有当前 Space 才 ensure 新建；其余 Space 只做清理。 */
+export function spacePlan({ tabs, panes, count, isActive } = {}) {
+  const all = Array.isArray(tabs) ? tabs : [];
+  const list = Array.isArray(panes) ? panes : [];
+  const ens = ensurePlan(all, list);
+  const out = { ensure: 'none', tab: ens.tab ?? null, settle: [], unsettle: [], cleanup: cleanupPlan(all, list, count) };
+  if (isActive && ens.kind === 'create') out.ensure = 'create';
+  if (isActive && ens.kind === 'exists') {
+    const tab = all.find(t => t.id === ens.tab);
+    const p = settlePlan({ count, active: tab?.active === true, settled: tab?.settled === true });
+    if (tab && p === 'settle') out.settle.push(tab.id);
+    if (tab && p === 'unsettle') out.unsettle.push(tab.id);
+  }
+  return out;
 }

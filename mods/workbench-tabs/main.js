@@ -1,7 +1,7 @@
 // 工作台标签栏：沿用 Herdr 原生行为与已核实菜单，统一状态图标。
 import { statusIcon } from './status.js';
 import { sidebarToggle } from './controls.js';
-import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, pickApprovalsPane, chipNode, globalCount, filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, cleanupPlan, cleanupLogLine, retryPlan, cleanupFailureLine, rowActions, decisionEvent, chipLabel } from './pending.js';
+import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, chipNode, globalCount, filterVisibleTabs, ensurePlan, settlePlan, spacePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, cleanupPlan, cleanupLogLine, retryPlan, cleanupFailureLine, rowActions, decisionEvent, chipLabel } from './pending.js';
 import { View, div, svg, image } from "gpui-kit";
 import * as fsPromises from "fs/promises";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
@@ -37,6 +37,7 @@ export default class Tabs extends View {
     this.store = new PendingStore({ read: async () => readTextFile(this.ledgerPath()) });
     this.published = "";
     this.sent = "";
+    this.sending = null;
     this.decisionError = null;
     this.creating = false;
     this.createError = null;
@@ -65,20 +66,22 @@ export default class Tabs extends View {
     const now = Date.now();
     const st = this.closeTries.get(id) ?? { n: 0, at: 0 };
     const decision = retryPlan({ tries: st.n, lastAt: st.at, now });
-    if (decision === "wait") return;
+    if (decision === "wait") return "wait";
     if (decision === "giveup") {
       this.logCleanup(`gave-up action=${action} id=${id} tries=${st.n}`);
       this.cleanupError = `清理失败：${id}`;
-      return;
+      return "giveup";
     }
     try {
       fn();
       this.closeTries.delete(id);
       this.cleanupError = null;
+      return "ok";
     } catch (error) {
       this.closeTries.set(id, { n: st.n + 1, at: now });
       this.cleanupError = `清理失败：${id}`;
       this.logCleanup(cleanupFailureLine({ action, id, error, now }));
+      return "fail";
     }
   }
 
@@ -114,7 +117,9 @@ export default class Tabs extends View {
       this.publishApprovals(state);
       const space = spaces().find(s => s.active);
       const tabs = space?.tabs ?? [];
-      const ens = ensurePlan(tabs);
+      const count = countRows(rowsForSpace(state.rows ?? [], space, spaces()));
+      const plan = spacePlan({ tabs, panes: panes(), count, isActive: true });
+      const ens = { kind: plan.ensure === "create" ? "create" : (plan.tab ? "exists" : "none"), tab: plan.tab };
       if (ens.kind === "create") {
         // 每个 Space 只建一次；建完立刻收起，避免抢当前视图。
         if (!this.creating) {
@@ -145,34 +150,37 @@ export default class Tabs extends View {
             this.creating = false;
             const sp = spaces().find(s => s.active);
             const t = sp?.tabs ?? [];
-            const e = ensurePlan(t);
+            const e = ensurePlan(t, panes());
             if (e.kind !== "exists") return;
             const tab = t.find(x => x.id === e.tab);
+            this.logCleanup(`ensure-create space=${sp?.id} created=${e.tab} prevActive=${prev ?? "-"}`);
             if (!tab || tab.settled) return;
             const count = countRows(rowsForSpace(this.store.state.rows ?? [], sp, spaces()));
-            if (settlePlan({ count, active: tab.active === true }) === "settle") run("tab.settle", { id: e.tab });
+            const plan = settlePlan({ count, active: tab.active === true, settled: false });
+            if (plan === "settle") this.runCleanup("settle", e.tab, () => run("tab.settle", { id: e.tab }));
           });
         }
-      } else {
-        const tab = tabs.find(x => x.id === ens.tab);
-        const count = countRows(rowsForSpace(state.rows ?? [], space, spaces()));
-        if (settlePlan({ count, active: tab?.active === true }) === "settle") run("tab.settle", { id: ens.tab });
+      } else if (ens.kind === "exists") {
+        for (const id of plan.settle) this.runCleanup("settle", id, () => run("tab.settle", { id }));
+        for (const id of plan.unsettle) this.runCleanup("unsettle", id, () => run("tab.unsettle", { id }));
       }
       // 清理历史遗留：每个 Space 只留最早出现的待批标签；关 active 重复项前先切到 keep。
       const plans = [];
       for (const sp of spaces()) {
         const tabs = sp?.tabs ?? [];
-        const plan = cleanupPlan(tabs, panes());
+        const count = countRows(rowsForSpace(state.rows ?? [], sp, spaces()));
+        const plan = cleanupPlan(tabs, panes(), count);
         if (!plan.keep) continue;
         const pendingIds = tabs.filter(t => t.name === "待批").map(t => t.id);
         if (plan.select.length || plan.close.length || plan.settle.length) plans.push({ sp, plan, pendingIds });
       }
       for (const { sp, plan, pendingIds } of plans) {
         this.logCleanup(`start space=${sp?.id} pending=${pendingIds.join(",") || "-"} keep=${plan.keep} close=${plan.close.join(",") || "-"} settle=${plan.settle.join(",") || "-"}`);
-        for (const id of plan.select) this.runCleanup("select", id, () => run("tab.select", { id }));
-        for (const id of plan.close) this.runCleanup("close", id, () => run("tab.close", { id, confirmed: true }));
-        for (const id of plan.settle) this.runCleanup("settle", id, () => run("tab.settle", { id }));
-        this.logCleanup(`done space=${sp?.id} keep=${plan.keep} closed=${plan.close.length} settled=${plan.settle.length}`);
+        const results = [];
+        for (const id of plan.select) results.push(this.runCleanup("select", id, () => run("tab.select", { id })));
+        for (const id of plan.close) results.push(this.runCleanup("close", id, () => run("tab.close", { id, confirmed: true })));
+        for (const id of plan.settle) results.push(this.runCleanup("settle", id, () => run("tab.settle", { id })));
+        this.logCleanup(`done space=${sp?.id} keep=${plan.keep} closed=${plan.close.length} settled=${plan.settle.length} failed=${results.filter(r => r === "fail").length}`);
       }
       const sig = `${state.kind}:${state.count ?? 0}:${state.rows?.length ?? 0}`;
       if (sig !== this.sig) { this.sig = sig; cx.notify(); }
@@ -305,9 +313,10 @@ export default class Tabs extends View {
 
   // 动作按钮：授权=批准/拒绝/稍后；选择=按建议/备选/都不行/稍后。按钮不贴边、不整行可点。
   decisionButtons(r, t, key) {
-    const BTN = (label, decision) => h_flex().h(22).px(8).items_center().rounded(5).flex_none().cursor_pointer().bg(t.hover)
-      .on_click((_e, cx) => { cx.stop_propagation(); this.sendDecision(r, decision, cx); })
-      .child(div().text_size(11).text_color(t.foreground).child(label));
+    const busy = this.sending === key;
+    const BTN = (label, decision) => h_flex().h(22).px(8).items_center().rounded(5).flex_none().bg(t.hover)
+      .when(!busy, el => el.cursor_pointer().on_click((_e, cx) => { cx.stop_propagation(); this.sendDecision(r, decision, cx); }))
+      .child(div().text_size(11).text_color(busy ? t.dim : t.foreground).child(label));
     const out = [];
     for (const action of rowActions(r.type)) {
       if (action === "approve") out.push(BTN("批准", "approve"));
@@ -324,22 +333,27 @@ export default class Tabs extends View {
 
   // 只发事件，不写账本；发送失败保留文案可复制重试。
   sendDecision(row, decision, cx) {
+    if (this.sending) return;
     if (decision === "later") {
-      const id = props()?.overlay;
-      if (id) closeOverlay(id);
-      setShared("approvals.open", false);
+      // 标签模式：稍后 = 收起当前待批标签，不发事件、不改账本。
+      const space = spaces().find(s => s.active);
+      const id = chipTarget({ panes: panes(), tabs: space?.tabs ?? [] });
+      if (id) this.runCleanup("settle", id, () => run("tab.settle", { id }));
       return;
     }
     const msg = decisionEvent(row, decision);
     this.lastMessage = msg;
     const sup = this.store?.state?.meta?.supervisor;
     if (!sup) { this.decisionError = true; cx.notify(); return; }
+    this.sending = rowKey(row);
+    cx.notify();
     hc(["send", sup, msg]).then(r => {
       if (r && r.code !== 0) throw new Error("send failed");
       this.sent = rowKey(row);
+      this.sending = null;
       this.decisionError = false;
       cx.notify();
-    }).catch(() => { this.decisionError = true; cx.notify(); });
+    }).catch(() => { this.sending = null; this.decisionError = true; cx.notify(); });
   }
 
   // The side panel is remembered per space: switching shows that space's choice
