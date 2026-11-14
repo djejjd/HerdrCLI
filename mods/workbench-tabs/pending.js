@@ -258,7 +258,8 @@ export function ledgerSignature(state) {
   const rows = Array.isArray(state?.rows) ? state.rows : [];
   const parts = [state?.kind ?? '', String(state?.count ?? 0), state?.reason ?? ''];
   for (const r of rows) {
-    parts.push(r?.what ?? '', r?.proposedAt ?? '', r?.where ?? '', r?.project ?? '', r?.done ? '1' : '0');
+    // 面板会显示这些字段，任何一个变了都要重新发布。
+    parts.push(r?.what ?? '', r?.impact ?? '', r?.proposedAt ?? '', r?.where ?? '', r?.project ?? '', r?.done ? '1' : '0');
   }
   return `${state?.kind ?? ''}:${state?.count ?? 0}:${rows.length}:${fnv(parts.join('\u0001'))}`;
 }

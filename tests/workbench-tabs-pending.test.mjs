@@ -344,6 +344,11 @@ test('发布签名：条数相同但内容变化也必须变', () => {
   assert.equal(ledgerSignature(base), ledgerSignature(same), '内容相同签名相同');
   assert.notEqual(ledgerSignature(base), ledgerSignature(replaced), '同条数换行要变');
   assert.notEqual(ledgerSignature(base), ledgerSignature(edited), '同条数改标题要变');
+  const impactOnly = { kind: 'count', count: 2, rows: [
+    { ...base.rows[0], impact: '换了说明' },
+    base.rows[1],
+  ] };
+  assert.notEqual(ledgerSignature(base), ledgerSignature(impactOnly), '同条数只改 impact 也要变');
   // 状态改动（done）也要变
   const toggled = { ...base, rows: [ { ...base.rows[0], done: true }, base.rows[1] ] };
   assert.notEqual(ledgerSignature(base), ledgerSignature(toggled));
