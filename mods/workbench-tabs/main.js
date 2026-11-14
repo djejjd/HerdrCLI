@@ -1,7 +1,7 @@
 // 工作台标签栏：沿用 Herdr 原生行为与已核实菜单，统一状态图标。
 import { statusIcon } from './status.js';
 import { sidebarToggle } from './controls.js';
-import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, nextEmptyStreak, closePlan, approvalsNav } from './pending.js';
+import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, nextEmptyStreak, closePlan, approvalsNav, ledgerSignature, pickState } from './pending.js';
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, props, home, exec, readTextFile } from "herdr";
@@ -83,7 +83,8 @@ export default class Tabs extends View {
 
   // 把状态发布给所有 mod（待批标签据此更新）；只在内容变化时发，避免 shared 重绘循环。
   publishApprovals(state) {
-    const key = `${state.kind}:${state.count ?? 0}:${state.reason ?? ""}:${state.rows?.length ?? 0}`;
+    // 用内容签名而不是条数：换一条、改一个字都要让面板看到新内容。
+    const key = ledgerSignature(state);
     if (key === this.published) return;
     this.published = key;
     setShared("approvals.state", {
@@ -111,11 +112,12 @@ export default class Tabs extends View {
 
   // 待批标签读 shared 的状态；没有时退回自己那一次读取。
   panelState() {
-    const sharedState = shared("approvals.state");
-    if (sharedState && typeof sharedState === "object") return sharedState;
     const own = this.store?.state;
-    if (!own || own.kind === "hidden") return null;
-    return { kind: own.kind, count: own.count ?? 0, reason: own.reason ?? null, rows: own.rows ?? [], at: this.store?.at ?? null };
+    const ownState = own && own.kind !== "hidden"
+      ? { kind: own.kind, count: own.count ?? 0, reason: own.reason ?? null, rows: own.rows ?? [], at: this.store?.at ?? 0 }
+      : null;
+    // 刚打开时本地读取比 shared 新，就用本地的，避免先看到上一轮旧内容。
+    return pickState(shared("approvals.state"), ownState);
   }
 
   // 已读只保留当前还存在的行，账本删行后 ack 自动回收（上限 200）。

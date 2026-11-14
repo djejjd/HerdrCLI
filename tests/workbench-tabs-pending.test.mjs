@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   splitRow, parseLedger, rowKey, countRows, ageText, classifyTarget, chipState, PendingStore, fixturePath, listPlan,
-  nextEmptyStreak, closePlan, approvalsNav,
+  nextEmptyStreak, closePlan, approvalsNav, ledgerSignature, pickState,
 } from '../mods/workbench-tabs/pending.js';
 
 const HEAD = '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |';
@@ -324,4 +324,40 @@ test('手动关闭后仍有 COUNT：chip 可见，再点走重建', () => {
   assert.deepEqual(approvalsNav([]), { kind: 'create' });
   // 未关闭时再点是复用，不重复建
   assert.equal(approvalsNav([{ pane: 'p1', tab: 'tb1', mod: 'workbench-tabs' }]).kind, 'open');
+});
+
+
+test('发布签名：条数相同但内容变化也必须变', () => {
+  const base = { kind: 'count', count: 2, rows: [
+    { what: '甲', where: 'w1', proposedAt: T, project: 'P', done: false },
+    { what: '乙', where: 'w2', proposedAt: T, project: 'P', done: false },
+  ] };
+  const replaced = { kind: 'count', count: 2, rows: [
+    { what: '甲', where: 'w1', proposedAt: T, project: 'P', done: false },
+    { what: '丙', where: 'w2', proposedAt: T, project: 'P', done: false },
+  ] };
+  const edited = { kind: 'count', count: 2, rows: [
+    { what: '甲改', where: 'w1', proposedAt: T, project: 'P', done: false },
+    { what: '乙', where: 'w2', proposedAt: T, project: 'P', done: false },
+  ] };
+  const same = { kind: 'count', count: 2, rows: base.rows.map(r => ({ ...r })) };
+  assert.equal(ledgerSignature(base), ledgerSignature(same), '内容相同签名相同');
+  assert.notEqual(ledgerSignature(base), ledgerSignature(replaced), '同条数换行要变');
+  assert.notEqual(ledgerSignature(base), ledgerSignature(edited), '同条数改标题要变');
+  // 状态改动（done）也要变
+  const toggled = { ...base, rows: [ { ...base.rows[0], done: true }, base.rows[1] ] };
+  assert.notEqual(ledgerSignature(base), ledgerSignature(toggled));
+  // 空/缺失/错误各自可区分
+  assert.notEqual(ledgerSignature({ kind: 'empty', rows: [] }), ledgerSignature({ kind: 'missing', rows: [] }));
+});
+
+test('shared 与本地读取的先后：谁的时间新用谁', () => {
+  const shared = { kind: 'count', count: 1, rows: [{ what: '旧' }], at: 100 };
+  const own = { kind: 'count', count: 1, rows: [{ what: '新' }], at: 200 };
+  assert.equal(pickState(shared, own).rows[0].what, '新', '本地更新时用本地');
+  assert.equal(pickState(shared, { ...own, at: 50 }).rows[0].what, '旧', 'shared 更新时用 shared');
+  assert.equal(pickState(shared, null).rows[0].what, '旧');
+  assert.equal(pickState(null, own).rows[0].what, '新');
+  assert.equal(pickState(null, null), null);
+  assert.equal(pickState(shared, { kind: 'hidden' }).rows[0].what, '旧', 'hidden 的本地状态不算新鲜');
 });

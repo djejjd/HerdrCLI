@@ -242,3 +242,32 @@ export function approvalsNav(panesList) {
   const hit = (Array.isArray(panesList) ? panesList : []).find(p => p && p.mod === 'workbench-tabs');
   return hit ? { kind: 'open', pane: hit.pane, tab: hit.tab } : { kind: 'create' };
 }
+
+const fnv = (text) => {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+};
+
+/** 发布签名：把 kind/数量/内容一起算成短哈希，条数不变但行内容变了也会变。
+ *  只比较签名，不把正文写进日志或持久化。 */
+export function ledgerSignature(state) {
+  const rows = Array.isArray(state?.rows) ? state.rows : [];
+  const parts = [state?.kind ?? '', String(state?.count ?? 0), state?.reason ?? ''];
+  for (const r of rows) {
+    parts.push(r?.what ?? '', r?.proposedAt ?? '', r?.where ?? '', r?.project ?? '', r?.done ? '1' : '0');
+  }
+  return `${state?.kind ?? ''}:${state?.count ?? 0}:${rows.length}:${fnv(parts.join('\u0001'))}`;
+}
+
+/** 面板取状态：shared 与本地读取谁的时间新用谁；hidden 视为没有本地状态。 */
+export function pickState(sharedState, ownState) {
+  const sh = sharedState && typeof sharedState === 'object' ? sharedState : null;
+  const own = ownState && ownState.kind && ownState.kind !== 'hidden' ? ownState : null;
+  if (!sh) return own;
+  if (!own) return sh;
+  return (Number(own.at) || 0) >= (Number(sh.at) || 0) ? own : sh;
+}
