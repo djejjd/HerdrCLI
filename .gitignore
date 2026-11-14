@@ -3,3 +3,6 @@ node_modules/
 .tmp/
 # gpui-kit 生成的类型声明（各 ~800KB），按需重建，不入库
 mods/*/gpui-kit.d.ts
+
+# 封存目录里的生成类型声明（可用 herdr-app check 重建，不入库）
+archive/**/*.d.ts
