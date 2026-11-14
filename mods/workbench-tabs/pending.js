@@ -1,0 +1,210 @@
+// 待批账本的纯逻辑：解析只读 Markdown 表格、计数口径、打开目标的安全判定、
+// 以及带作废机制的异步读取。不依赖 herdr/gpui，便于单测。
+// mod 从不写账本：清除只认账本里的状态列。
+
+const WHAT = '要你做什么';
+const MAX_ROWS = 200;
+const MAX_CELL = 200;
+const DONE = new Set(['已处理', '已完成', 'done', 'closed']);
+
+/** 拆一行表格：去掉首尾竖线，转义的 \| 还原为字面竖线。null 行按空处理。 */
+export function splitRow(line) {
+  if (typeof line !== 'string') return [];
+  let s = line.trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|') && !s.endsWith('\\|')) s = s.slice(0, -1);
+  const cells = [];
+  let cur = '';
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s[i];
+    if (c === '\\' && s[i + 1] === '|') { cur += '|'; i += 1; continue; }
+    if (c === '|') { cells.push(cur.trim()); cur = ''; continue; }
+    cur += c;
+  }
+  cells.push(cur.trim());
+  return cells;
+}
+
+const cut = s => {
+  const v = String(s ?? '').trim();
+  return v.length > MAX_CELL ? `${v.slice(0, MAX_CELL)}…` : v;
+};
+
+/** 解析账本：只认第一个含「要你做什么」的表头之后的连续表格行。
+ *  返回 { rows, error }；error 为 null / 'no-header' / 'no-what' / 'unreadable'。
+ *  rows 里保留已完成行（done=true），计数由 countRows 决定。 */
+export function parseLedger(text) {
+  if (typeof text !== 'string') return { rows: [], error: 'unreadable' };
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  // 第一张表的第一行就是表头；缺必需列与“根本没有表”要分开报。
+  let header = null;
+  let start = 0;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!lines[i].trim().startsWith('|')) continue;
+    const cells = splitRow(lines[i]);
+    if (cells.length >= 2 && cells.every(c => /^:?-{2,}:?$/.test(c))) continue;
+    header = cells;
+    start = i + 1;
+    break;
+  }
+  if (!header) return { rows: [], error: 'no-header' };
+  const at = name => header.indexOf(name);
+  if (at(WHAT) < 0) return { rows: [], error: 'no-what' };
+  // 状态列必填：没有它就无法区分未处理与已处理，不能猜。
+  if (at('状态') < 0) return { rows: [], error: 'no-status' };
+  const iWhat = at(WHAT), iImpact = at('不做会怎样'), iWhere = at('去哪点');
+  const iAt = at('提出时间'), iProject = at('项目'), iStatus = at('状态');
+  const rows = [];
+  for (let i = start; i < lines.length && rows.length < MAX_ROWS; i += 1) {
+    const line = lines[i];
+    if (!line.trim().startsWith('|')) break;
+    const cells = splitRow(line);
+    if (cells.length >= 2 && cells.every(c => /^:?-{2,}:?$/.test(c))) continue;
+    if (cells.length < 2) continue;
+    const what = cut(cells[iWhat]);
+    // 账本示例行按 t19 约定：含「（示例）」即跳过。
+    if (!what || /（示例）|\(示例\)/.test(what)) continue;
+    const status = iStatus >= 0 ? String(cells[iStatus] ?? '').trim() : '';
+    rows.push({
+      what,
+      impact: cut(iImpact >= 0 ? cells[iImpact] : ''),
+      where: cut(iWhere >= 0 ? cells[iWhere] : ''),
+      proposedAt: cut(iAt >= 0 ? cells[iAt] : ''),
+      project: cut(iProject >= 0 ? cells[iProject] : ''),
+      done: DONE.has(status.toLowerCase()),
+    });
+  }
+  return { rows, error: null };
+}
+
+/** 一行的稳定 key：内容变则 key 变，已读标记随之失效。 */
+export function rowKey(row) {
+  const text = `${row?.what ?? ''}\u0000${row?.where ?? ''}\u0000${row?.proposedAt ?? ''}`;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
+/** 由 ISO 提出时间现算“提了多久”：刚刚 / N 分钟 / N 小时 / N 天；缺列或坏值给时间未知。 */
+export function ageText(row, now = Date.now()) {
+  const raw = row?.proposedAt;
+  if (typeof raw !== 'string' || !raw.trim()) return '时间未知';
+  const at = Date.parse(raw);
+  if (!Number.isFinite(at)) return '时间未知';
+  const ms = Math.max(0, now - at);
+  const min = 60_000, hour = 60 * min, day = 24 * hour;
+  if (ms < min) return '刚刚';
+  if (ms < hour) return `${Math.floor(ms / min)} 分钟`;
+  if (ms < day) return `${Math.floor(ms / hour)} 小时`;
+  return `${Math.floor(ms / day)} 天`;
+}
+
+/** 未处理的条数：只认账本状态列，已读标记不参与（akcs 参数仅为调用方兼容）。 */
+export function countRows(rows, _acks) {
+  return Array.isArray(rows) ? rows.filter(r => r && !r.done).length : 0;
+}
+
+/** chip 的显示状态：0 行隐藏；账本缺失与读取/解析失败都要露出“待批 ?”，不静默。 */
+export function chipState(state) {
+  if (!state || state.kind === 'hidden') return { kind: 'hidden' };
+  if (state.kind === 'missing') return { kind: 'missing' };
+  if (state.kind === 'error') return { kind: 'error', reason: state.reason ?? '' };
+  const count = Number(state.count) || 0;
+  return count > 0 ? { kind: 'count', count } : { kind: 'hidden' };
+}
+
+const URL_OK = new Set(['http:', 'https:']);
+
+/** 「去哪点」的安全判定：只放行 http/https（有 host、无 userinfo）
+ *  与 home 之下的绝对路径（无 .. / . 段、不以 - 开头）。
+ *  返回 { kind: 'url' | 'path', value } 或 null；存在性由调用方 stat 再查。 */
+export function classifyTarget(raw, home) {
+  if (typeof raw !== 'string') return null;
+  const s = raw.trim();
+  if (!s || s.length > 500) return null;
+  if (/[\u0000-\u001f\u007f]/.test(s)) return null;
+  if (s.startsWith('-')) return null;
+  const m = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(s);
+  if (m) {
+    if (!URL_OK.has(`${m[1].toLowerCase()}:`)) return null;
+    let u;
+    try { u = new URL(s); } catch { return null; }
+    if (!u.hostname || u.username || u.password) return null;
+    return { kind: 'url', value: u.toString() };
+  }
+  const base = typeof home === 'string' && home ? home.replace(/\/+$/, '') : '';
+  if (!base) return null;
+  let p = s;
+  if (p === '~' || p.startsWith('~/')) p = `${base}/${p.slice(2)}`;
+  if (!p.startsWith('/')) return null;
+  if (p.split('/').some(seg => seg === '..' || seg === '.')) return null;
+  if (p !== base && !p.startsWith(`${base}/`)) return null;
+  return { kind: 'path', value: p };
+}
+
+/** 账本读取的状态机：read 注入、在途结果按 generation 作废、close 为终态。
+ *  state: { kind: 'hidden' } | { kind: 'count', count, rows } | { kind: 'error', reason }
+ *  at: 最后一次成功读取的时间（0 表示还没读到）。 */
+export class PendingStore {
+  constructor({ read, now = () => Date.now() } = {}) {
+    this.read = read ?? (async () => null);
+    this.now = now;
+    this.state = { kind: 'hidden' };
+    this.at = 0;
+    this.generation = 0;
+    this.closed = false;
+  }
+
+  /** 读一次；关闭或已被更晚的读取取代时保持原状态。 */
+  async refresh() {
+    if (this.closed) return this.state;
+    const gen = (this.generation += 1);
+    const stale = () => this.closed || gen !== this.generation;
+    try {
+      const text = await this.read();
+      if (stale()) return this.state;
+      let next;
+      // 账本不存在不等于“没有待批”：要显示缺失态，只有真读到 0 行才隐藏。
+      if (text == null) next = { kind: 'missing' };
+      else {
+        const parsed = parseLedger(text);
+        if (parsed.error) next = { kind: 'error', reason: parsed.error };
+        else {
+          const rows = parsed.rows;
+          const count = countRows(rows);
+          next = count > 0 ? { kind: 'count', count, rows } : { kind: 'hidden' };
+        }
+      }
+      this.state = next;
+      this.at = this.now();
+      return next;
+    } catch {
+      if (stale()) return this.state;
+      this.state = { kind: 'error', reason: 'read' };
+      this.at = this.now();
+      return this.state;
+    }
+  }
+
+  /** 终态：作废在途读取，之后的 refresh 不再改状态。 */
+  close() {
+    this.closed = true;
+    this.generation += 1;
+  }
+}
+
+/** 验收用的账本路径覆盖：只在有效期内、且指向临时目录时生效；
+ *  其它遗留值一律返回 null，不让测试路径影响真实运行。 */
+export function fixturePath(raw, now = Date.now()) {
+  if (typeof raw !== 'string' || !raw) return null;
+  let v;
+  try { v = JSON.parse(raw); } catch { return null; }
+  if (!v || typeof v.path !== 'string' || typeof v.until !== 'number') return null;
+  if (v.until <= now) return null;
+  const p = v.path;
+  if (!p.startsWith('/tmp/') && !p.startsWith('/private/tmp/')) return null;
+  return p;
+}
