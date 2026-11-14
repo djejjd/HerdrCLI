@@ -10,6 +10,9 @@ import { toggleFold, spaceSelectArgs, spaceHint, moveSpace, applyOrder } from '.
 import { branchTokens, quotaGroups, feeSegments, feeTooltip, footerHeight, quotaLineKind, resetHint, quotaTooltip, silentState, hasValue, refreshStamp } from './visual.js';
 import { backgroundRows, backgroundAction, rowSelected, backgroundRow } from './subagents.js';
 import { statusIcon } from './status.js';
+
+// 待批入口开关：false = 侧栏不显示「待批」一行（2026-11-15 暂时停用）。
+const APPROVALS_ENTRY = false;
 import { createConversation } from './operations.js';
 const HISTORY='workbench.history.v1';
 // 失败弹窗的选择通过 shared 回传：框关闭后由侧栏执行且只执行一次。
@@ -578,12 +581,12 @@ export default class Workbench extends View {
     if(this.drag?.space===space.id){const at=list.findIndex(a=>a.address===this.drag.address);if(at>=0)rows.push(rows.splice(at,1)[0]);}
     const before=list.length+subs.length;
     // 当前 Space 的「待批」入口：不新开分区，夹在 agents 与 terminals 之间。
-    rows.push(h_flex().id(`pending-${space.id}`).absolute().left(26).right(2).top(before*ROW).h(ROW_H)
+    if (APPROVALS_ENTRY) rows.push(h_flex().id(`pending-${space.id}`).absolute().left(26).right(2).top(before*ROW).h(ROW_H)
       .pl(6).pr(10).gap(6).items_center().cursor_pointer().rounded(6).hover(s=>s.bg(t.hover))
       .on_click(()=>{const req={space:space.id,at:Date.now(),nonce:`${space.id}-${Date.now()}`};setShared('approvals.openRequest',req);setShared('approvals.lastOpen',{...req,stage:'click',result:null});})
       .child(svg('mods/agent-workbench/attention.svg').size(13).text_color(t.muted))
       .child(div().text_size(12.5).text_color(t.muted).child('待批')));
-    const total=before+1;
+    const total=before+(APPROVALS_ENTRY?1:0);
     const terms=spaceTerminals(all,list,panes(),space.id);
     const foldedTerm=this.termFolded.has(space.id);
     const win=terminalSectionRows(terms,{folded:foldedTerm,expanded:this.termExpanded.has(space.id)});
