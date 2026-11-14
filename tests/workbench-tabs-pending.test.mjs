@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
   splitRow, parseLedger, rowKey, countRows, ageText, classifyTarget, chipState, PendingStore, fixturePath, listPlan,
   ledgerSignature, pickState, rowsForSpace, pickApprovalsPane, chipNode, globalCount,
-  filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, cleanupPlan, cleanupLogLine, createArgs2, tabDot, readyGate, spaceSignature, markerPlan, createdRing, requestPlan, creationPlan, spacePlan, retryPlan, cleanupFailureLine, rowActions, decisionEvent, chipLabel,
+  filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, cleanupPlan, cleanupLogLine, createArgs2, tabDot, readyGate, spaceSignature, markerPlan, createdRing, requestPlan, creationPlan, createLockPlan, rebuildPlan, spacePlan, retryPlan, cleanupFailureLine, rowActions, decisionEvent, chipLabel,
 } from '../mods/workbench-tabs/pending.js';
 
 const HEAD = '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |';
@@ -709,7 +709,7 @@ test('decisionEvent：正文里的｜与换行被替换', () => {
 test('spacePlan：只有当前 Space 新建；有数收起则展；0 条非激活收起', () => {
   const P = id => ({ pane: 'p' + id, tab: id, mod: 'workbench-tabs' });
   const empty = spacePlan({ tabs: [{ id: 'm', name: '1' }], panes: [], count: 0, isActive: true });
-  assert.equal(empty.ensure, 'create');
+  assert.equal(empty.ensure, 'none');
   const inactive = spacePlan({ tabs: [{ id: 'm', name: '1' }], panes: [], count: 0, isActive: false });
   assert.equal(inactive.ensure, 'none');
   const folded = spacePlan({ tabs: [{ id: 'b', name: '待批', settled: true }, { id: 'm' }], panes: [P('b')], count: 2, isActive: true });
@@ -802,4 +802,33 @@ test('creationPlan：prebuild/ensure/force 三路分流', () => {
   assert.equal(creationPlan({ ...has, count: 0, mode: 'ensure' }), 'none');
   // pane 未知同名 -> wait
   assert.equal(creationPlan({ tabs: [{ id: 'b', name: '待批' }], panes: [], count: 1, mode: 'ensure' }), 'wait');
+});
+
+
+test('createLockPlan：15 秒 TTL，慢 create（6s）不重复建', () => {
+  const lock = { at: 1000, space: 'sp1' };
+  assert.equal(createLockPlan({ lock, now: 2000 }), 'wait');
+  assert.equal(createLockPlan({ lock, now: 7000 }), 'wait');
+  assert.equal(createLockPlan({ lock, now: 16001 }), 'run');
+  assert.equal(createLockPlan({ lock: null, now: 2000 }), 'run');
+});
+
+test('rebuildPlan：pane 缺失 15s 后才给重建，且只认 created ring 里的 id', () => {
+  const named = [{ id: 'tb1', name: '待批' }];
+  const panes = [];
+  assert.equal(rebuildPlan({ named, panes, since: 1000, now: 5000, created: ['tb1'] }), null);
+  assert.deepEqual(rebuildPlan({ named, panes, since: 1000, now: 17000, created: ['tb1'] }), { id: 'tb1' });
+  // 不在 ring 里：不给重建（不按名字关外来标签）
+  assert.equal(rebuildPlan({ named, panes, since: 1000, now: 17000, created: [] }), null);
+  // pane 已就绪：不给
+  const okPanes = [{ pane: 'p', tab: 'tb1', mod: 'workbench-tabs' }];
+  assert.equal(rebuildPlan({ named, panes: okPanes, since: 1000, now: 17000, created: ['tb1'] }), null);
+});
+
+test('ledgerSignature 与 spaceSignature 职责不同：done 行只影响前者', () => {
+  const known = [{ id: 'sp1', name: 'A' }];
+  const base = [{ what: '甲', space: 'A', done: false, impact: '', where: '', project: '', proposedAt: 't', type: '授权' }];
+  const doneRow = [{ ...base[0], done: true }];
+  assert.notEqual(ledgerSignature({ kind: 'count', rows: doneRow }), ledgerSignature({ kind: 'count', rows: base }));
+  assert.equal(spaceSignature({ rows: doneRow, space: { name: 'A' }, knownSpaces: known }), '');
 });

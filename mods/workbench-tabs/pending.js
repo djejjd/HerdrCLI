@@ -445,7 +445,7 @@ export function spacePlan({ tabs, panes, count, isActive } = {}) {
   const list = Array.isArray(panes) ? panes : [];
   const ens = ensurePlan(all, list);
   const out = { ensure: 'none', tab: ens.tab ?? null, settle: [], unsettle: [], cleanup: cleanupPlan(all, list, count) };
-  if (isActive && ens.kind === 'create') out.ensure = 'create';
+  if (isActive && ens.kind === 'create' && Number(count) > 0) out.ensure = 'create';
   if (isActive && ens.kind === 'exists') {
     const tab = all.find(t => t.id === ens.tab);
     const p = settlePlan({ count, active: tab?.active === true, settled: tab?.settled === true });
@@ -519,4 +519,21 @@ export function creationPlan({ tabs, panes, count, mode, markerKeep, } = {}) {
   if (markerKeep) return 'none';
   if (mode === 'force' || mode === 'prebuild') return 'create';
   return Number(count) > 0 ? 'create' : 'none';
+}
+
+/** 创建锁：15 秒内不重复建（覆盖慢 create）。 */
+export function createLockPlan({ lock, now = Date.now(), ttl = 15000 } = {}) {
+  if (!lock || !lock.at) return 'run';
+  return now - Number(lock.at) < ttl ? 'wait' : 'run';
+}
+
+/** pane 缺失 15 秒后给出重建目标：只认 created ring 里我们建过的 id。 */
+export function rebuildPlan({ named, panes, since, now = Date.now(), created = [], timeout = 15000 } = {}) {
+  if (!since || !Array.isArray(named) || !named.length) return null;
+  if (now - Number(since) < timeout) return null;
+  const list = Array.isArray(panes) ? panes : [];
+  const paneOf = id => list.find(p => p && p.tab === id);
+  if (named.some(t => paneOf(t.id)?.mod === 'workbench-tabs')) return null;
+  const known = named.find(t => (Array.isArray(created) ? created : []).includes(t.id));
+  return known ? { id: known.id } : null;
 }

@@ -1,7 +1,7 @@
 // 工作台标签栏：沿用 Herdr 原生行为与已核实菜单，统一状态图标。
 import { statusIcon } from './status.js';
 import { sidebarToggle } from './controls.js';
-import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, chipNode, globalCount, filterVisibleTabs, ensurePlan, settlePlan, spacePlan, chipTarget, createArgs, createArgs2, legacyCreateArgs, createFailure, tabDot, readyGate, spaceSignature, markerPlan, createdRing, requestPlan, creationPlan, cleanupPlan, cleanupLogLine, retryPlan, cleanupFailureLine, rowActions, decisionEvent, chipLabel } from './pending.js';
+import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, chipNode, globalCount, filterVisibleTabs, ensurePlan, settlePlan, spacePlan, chipTarget, createArgs, createArgs2, legacyCreateArgs, createFailure, tabDot, readyGate, spaceSignature, markerPlan, createdRing, requestPlan, creationPlan, createLockPlan, rebuildPlan, cleanupPlan, cleanupLogLine, retryPlan, cleanupFailureLine, rowActions, decisionEvent, chipLabel } from './pending.js';
 import { View, div, svg, image } from "gpui-kit";
 import * as fsPromises from "fs/promises";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
@@ -53,6 +53,8 @@ export default class Tabs extends View {
     this.localCount = 0;
     this.errorText = null;
     this.created = JSON.parse(localStorage.getItem("approvals.created") ?? "{}");
+    this.paneMissing = new Map();
+    this.rebuildId = null;
     if (_props?.approvals) {
       this.page = 0;
       this.store.refresh().then(() => { if (!this.store.closed) cx.notify(); }).catch(() => {});
@@ -205,6 +207,9 @@ export default class Tabs extends View {
           if (t) this.runCleanup("unsettle", t.id, () => run("tab.unsettle", { id: t.id }));
         }
         if (plan === "create" && !this.creating) {
+          const lock = JSON.parse(localStorage.getItem("approvals.createLock") ?? "null");
+          if (createLockPlan({ lock }) === "wait") continue;
+          localStorage.setItem("approvals.createLock", JSON.stringify({ space: sp.id, at: Date.now() }));
           this.creating = true;
           const prevActive = tabs.find(x => x.active)?.id ?? null;
           if (prevActive) this.prevTab.set(sp.id, prevActive);
@@ -212,6 +217,7 @@ export default class Tabs extends View {
             run("tab.new", createArgs2({ space: sp.id }));
             this.createError = null;
           } catch (error) {
+            localStorage.removeItem("approvals.createLock");
             const st = createFailure({ spaceId: sp.id, error });
             this.creating = st.creating;
             this.createError = st.createError;
@@ -221,6 +227,7 @@ export default class Tabs extends View {
           const createdSpace = sp.id;
           cx.timer.after(600, () => {
             this.creating = false;
+            localStorage.removeItem("approvals.createLock");
             const t = spaces().find(x => x.id === createdSpace)?.tabs ?? [];
             const e = ensurePlan(t, panes());
             if (e.kind !== "exists") return;
@@ -261,7 +268,18 @@ export default class Tabs extends View {
       const curTabs = cur?.tabs ?? [];
       this.localCount = countRows(rowsForSpace(state.rows ?? [], cur, allSpaces));
       this.pendingTabId = oursOf(curTabs)[0]?.id ?? null;
-      this.errorText = this.createError || this.cleanupError || (state.kind === "missing" ? "账本缺失" : state.kind === "error" ? "账本解析失败" : null);
+      const namedTabs = curTabs.filter(t => t.name === "待批");
+      const paneReady = namedTabs.some(t => panes().find(p => p && p.tab === t.id)?.mod === "workbench-tabs");
+      if (namedTabs.length && !paneReady) {
+        if (!this.paneMissing.has(cur?.id)) this.paneMissing.set(cur?.id, Date.now());
+      } else if (cur) {
+        this.paneMissing.delete(cur.id);
+      }
+      const rb = rebuildPlan({ named: namedTabs, panes: panes(), since: this.paneMissing.get(cur?.id), created: this.created[cur?.id] ?? [] });
+      this.rebuildId = rb?.id ?? null;
+      this.errorText = this.createError || this.cleanupError
+        || (namedTabs.length && !paneReady ? "面板信息未就绪，可重建" : null)
+        || (state.kind === "missing" ? "账本缺失" : state.kind === "error" ? "账本解析失败" : null);
       const sig = `${state.kind}:${state.count ?? 0}:${state.rows?.length ?? 0}`;
       if (sig !== this.sig) { this.sig = sig; cx.notify(); }
     }).catch(() => {});
@@ -595,8 +613,19 @@ export default class Tabs extends View {
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/verified-tabs/win-min.svg").size(16) : "−", () => run("window.minimize")))
         .child(button("maximize", w.platform === "windows" ? svg(`mods/verified-tabs/${w.maximized ? "win-restore" : "win-max"}.svg`).size(16) : "□", () => run("window.maximize")))
         .child(button("close-window", w.platform === "windows" ? svg("mods/verified-tabs/win-close.svg").size(16) : svg("mods/pane/close.svg").size(13), () => run("window.close"))));
-    const errorLine = div().h(12).pl(lightsPadding).pr(12).text_size(10.5).text_color(t.muted)
-      .when(Boolean(this.errorText), el => el.tooltip(this.errorText).child(this.errorText));
+    const errorLine = h_flex().h(12).pl(lightsPadding).pr(12).gap(6).items_center().text_size(10.5).text_color(t.muted)
+      .when(Boolean(this.errorText), el => el.child(div().truncate().child(this.errorText)))
+      .when(Boolean(this.rebuildId), el => el.child(h_flex().h(12).px(5).items_center().rounded(3).cursor_pointer().bg(t.hover)
+        .on_click((_e, cx) => {
+          cx.stop_propagation();
+          const id = this.rebuildId;
+          if (id) run("tab.close", { id, confirmed: true });
+          this.paneMissing.delete(spaces().find(s => s.active)?.id);
+          this.rebuildId = null;
+          const ap = spaces().find(s => s.active);
+          if (ap) run("tab.new", createArgs2({ space: ap.id }));
+        })
+        .child(div().child("重建"))));
     return v_flex().size_full().min_w(0).child(tabsRow).child(errorLine);
   }
 }
