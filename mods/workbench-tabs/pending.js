@@ -382,3 +382,11 @@ export function creationHint({ appearing, failed, opening, now = Date.now(), tim
 export function nextEmptyStreak(prev, kind) {
   return kind === 'empty' ? (Number(prev) || 0) + 1 : 0;
 }
+
+/** chip 正文：只给数字或 ?；隐藏态返回空串（chip 不渲染）。 */
+export function chipLabel(state) {
+  const s = chipState(state);
+  if (s.kind === 'hidden') return '';
+  if (s.kind === 'missing' || s.kind === 'error') return '?';
+  return String(s.count);
+}

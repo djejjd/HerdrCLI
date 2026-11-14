@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
   splitRow, parseLedger, rowKey, countRows, ageText, classifyTarget, chipState, PendingStore, fixturePath, listPlan,
   ledgerSignature, pickState, rowsForSpace, pickApprovalsPane, chipNode, globalCount,
-  navPlan, closeFocusPlan, closePlan, creationHint, rowActions, decisionEvent,
+  navPlan, closeFocusPlan, closePlan, creationHint, rowActions, decisionEvent, chipLabel,
 } from '../mods/workbench-tabs/pending.js';
 
 const HEAD = '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |';
@@ -545,4 +545,21 @@ test('静态检查：chip 路径不得出现 tab.new，且不得引用已删除�
   for (const dead of ['chipAction']) {
     assert.equal(new RegExp(`\\b${dead}\\b`).test(main), false, `死代码未清：${dead}`);
   }
+});
+
+
+test('chipLabel：只给数字或 ?，不带「待批」字样', () => {
+  assert.equal(chipLabel({ kind: 'count', count: 1 }), '1');
+  assert.equal(chipLabel({ kind: 'count', count: 12 }), '12');
+  assert.equal(chipLabel({ kind: 'missing' }), '?');
+  assert.equal(chipLabel({ kind: 'error', reason: 'x' }), '?');
+  assert.equal(chipLabel({ kind: 'hidden' }), '');
+  for (const v of ['1', '12', '?']) assert.equal(/[^0-9?]/.test(v), false, `只允许数字或问号：${v}`);
+});
+
+test('静态：chip 渲染不得出现字面量「待批」，正文只用 chipLabel', () => {
+  const main = readFileSync(new URL('../mods/workbench-tabs/main.js', import.meta.url), 'utf8');
+  assert.equal(/\.child\(`待批/.test(main), false);
+  assert.equal(/\.child\("待批/.test(main), false);
+  assert.match(main, /chipLabel\(/, 'chip 正文应由 chipLabel 生成');
 });

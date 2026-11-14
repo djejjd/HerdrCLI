@@ -1,7 +1,7 @@
 // 工作台标签栏：沿用 Herdr 原生行为与已核实菜单，统一状态图标。
 import { statusIcon } from './status.js';
 import { sidebarToggle } from './controls.js';
-import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, pickApprovalsPane, chipNode, globalCount, navPlan, closeFocusPlan, closePlan, creationHint, nextEmptyStreak, rowActions, decisionEvent } from './pending.js';
+import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, pickApprovalsPane, chipNode, globalCount, navPlan, closeFocusPlan, closePlan, creationHint, nextEmptyStreak, rowActions, decisionEvent, chipLabel } from './pending.js';
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, props, home, exec, readTextFile, hc } from "herdr";
@@ -218,9 +218,9 @@ export default class Tabs extends View {
     const s = chipState(this.localApprovals());
     if (!chipNode(s)) return null;
     const bad = s.kind === "missing" || s.kind === "error";
-    return h_flex().id("approvals-chip").h(26).px(7).gap(5).flex_none().items_center().rounded(6)
-      .bg(t.hover).text_color(bad ? t.dim : t.blocked).cursor_pointer()
-      .tooltip(this.hint(s))
+    return h_flex().id("approvals-chip").h(24).px(7).gap(4).flex_none().items_center().rounded(6)
+      .bg(t.selected).text_color(bad ? t.dim : t.blocked).cursor_pointer()
+      .tooltip(bad ? "待批账本有问题，点击查看" : `待审批 ${s.count} 条，点击打开待批页面`)
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click((_e, cx) => {
         cx.stop_propagation();
@@ -251,7 +251,7 @@ export default class Tabs extends View {
         }
       })
       .child(statusIcon(bad ? "idle" : "blocked", t))
-      .child(div().text_size(12).font_medium().child(bad ? "待批 ?" : `待批 ${s.count}`));
+      .child(div().text_size(11).font_semibold().child(chipLabel(s)));
   }
 
   approvalRow(r, t) {
