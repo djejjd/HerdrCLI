@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
   splitRow, parseLedger, rowKey, countRows, ageText, classifyTarget, chipState, PendingStore, fixturePath, listPlan,
   ledgerSignature, pickState, rowsForSpace, pickApprovalsPane, chipNode, globalCount,
-  filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, cleanupPlan, cleanupLogLine, spacePlan, retryPlan, cleanupFailureLine, rowActions, decisionEvent, chipLabel,
+  filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, cleanupPlan, cleanupLogLine, createArgs2, tabDot, readyGate, spaceSignature, markerPlan, createdRing, requestPlan, creationPlan, spacePlan, retryPlan, cleanupFailureLine, rowActions, decisionEvent, chipLabel,
 } from '../mods/workbench-tabs/pending.js';
 
 const HEAD = '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |';
@@ -719,4 +719,87 @@ test('spacePlan：只有当前 Space 新建；有数收起则展；0 条非激�
   assert.deepEqual(zeroIdle.settle, ['b']);
   const zeroActive = spacePlan({ tabs: [{ id: 'b', name: '待批', active: true }, { id: 'm' }], panes: [P('b')], count: 0, isActive: true });
   assert.deepEqual(zeroActive.settle, []);
+});
+
+
+test('createArgs2：带 space、focus:false', () => {
+  const a = createArgs2({ space: 'sp1' });
+  assert.equal(a.space, 'sp1');
+  assert.equal(a.focus, false);
+  assert.equal(a.name, '待批');
+});
+
+test('tabDot：仅 count>0 显示红点', () => {
+  assert.equal(tabDot(0), false);
+  assert.equal(tabDot(1), true);
+  assert.equal(tabDot(9), true);
+});
+
+test('readyGate：首次读账本结束 + 2 秒后才放行', () => {
+  assert.equal(readyGate({ startedAt: 0, firstReadAt: null, now: 5000 }), false);
+  assert.equal(readyGate({ startedAt: 0, firstReadAt: 3000, now: 4000 }), false);
+  assert.equal(readyGate({ startedAt: 0, firstReadAt: 3000, now: 5600 }), true);
+  assert.equal(readyGate({ startedAt: 0, firstReadAt: 3000, now: 9000 }), true);
+});
+
+test('spaceSignature：按 Space、只算未处理行；别的 Space 与 done 不影响', () => {
+  const known = [{ id: 'sp1', name: 'A' }, { id: 'sp2', name: 'B' }];
+  const rows = [
+    { what: '甲', space: 'A', done: false, impact: '', where: '', project: '', proposedAt: 't', type: '授权' },
+    { what: '乙', space: 'A', done: true, impact: '', where: '', project: '', proposedAt: 't', type: '授权' },
+    { what: '丙', space: 'B', done: false, impact: '', where: '', project: '', proposedAt: 't', type: '授权' },
+  ];
+  const a1 = spaceSignature({ rows, space: { name: 'A' }, knownSpaces: known });
+  assert.equal(a1.includes('乙') || a1.includes('丙'), false);
+  // 已处理行的内容变化不影响（仍为 done）
+  const rows2 = rows.map(r => r.what === '乙' ? { ...r, what: '乙改' } : r);
+  assert.equal(spaceSignature({ rows: rows2, space: { name: 'A' }, knownSpaces: known }), a1);
+  // 别的 Space 变化不影响
+  const rows3 = rows.map(r => r.what === '丙' ? { ...r, what: '丙改' } : r);
+  assert.equal(spaceSignature({ rows: rows3, space: { name: 'A' }, knownSpaces: known }), a1);
+  // 本 Space 未处理行变化则变
+  const rows4 = rows.map(r => r.what === '甲' ? { ...r, what: '甲改' } : r);
+  assert.notEqual(spaceSignature({ rows: rows4, space: { name: 'A' }, knownSpaces: known }), a1);
+  // 0 条为空串
+  assert.equal(spaceSignature({ rows: [], space: { name: 'A' }, knownSpaces: known }), '');
+});
+
+test('markerPlan：签名相同保留；0 条/签名变/force 清除', () => {
+  const marker = { signature: 'sig1', at: 1 };
+  assert.equal(markerPlan({ marker, signature: 'sig1', count: 2 }).keep, true);
+  assert.equal(markerPlan({ marker, signature: 'sig1', count: 0 }).keep, false);
+  assert.equal(markerPlan({ marker, signature: 'sig2', count: 2 }).keep, false);
+  assert.equal(markerPlan({ marker, signature: 'sig1', count: 2, force: true }).keep, false);
+  assert.equal(markerPlan({ marker: null, signature: 'sig1', count: 2 }).keep, false);
+});
+
+test('createdRing：按 Space 有界', () => {
+  let ring = [];
+  for (let i = 0; i < 25; i += 1) ring = createdRing(ring, `tb${i}`, 20);
+  assert.equal(ring.length, 20);
+  assert.equal(ring[0], 'tb5');
+  assert.equal(ring[19], 'tb24');
+});
+
+test('requestPlan：TTL 内消费一次，过期拒绝', () => {
+  const req = { space: 'sp1', at: 1000, nonce: 'n1' };
+  assert.deepEqual(requestPlan({ request: req, now: 5000 }), req);
+  assert.equal(requestPlan({ request: req, now: 20000 }), null);
+  assert.equal(requestPlan({ request: null, now: 5000 }), null);
+});
+
+test('creationPlan：prebuild/ensure/force 三路分流', () => {
+  const P = id => ({ pane: 'p' + id, tab: id, mod: 'workbench-tabs' });
+  const base = { tabs: [{ id: 'm', name: '1' }], panes: [], count: 0, markerKeep: false };
+  assert.equal(creationPlan({ ...base, mode: 'prebuild' }), 'create');
+  assert.equal(creationPlan({ ...base, mode: 'ensure' }), 'none');
+  assert.equal(creationPlan({ ...base, mode: 'ensure', count: 2 }), 'create');
+  assert.equal(creationPlan({ ...base, mode: 'force' }), 'create');
+  assert.equal(creationPlan({ ...base, mode: 'ensure', count: 2, markerKeep: true }), 'none');
+  // 已存在：N>0 且 settled -> unsettle；否则 none
+  const has = { tabs: [{ id: 'b', name: '待批', settled: true }, { id: 'm' }], panes: [P('b')], count: 2 };
+  assert.equal(creationPlan({ ...has, mode: 'ensure' }), 'unsettle');
+  assert.equal(creationPlan({ ...has, count: 0, mode: 'ensure' }), 'none');
+  // pane 未知同名 -> wait
+  assert.equal(creationPlan({ tabs: [{ id: 'b', name: '待批' }], panes: [], count: 1, mode: 'ensure' }), 'wait');
 });

@@ -454,3 +454,69 @@ export function spacePlan({ tabs, panes, count, isActive } = {}) {
   }
   return out;
 }
+
+/** 预建/按需创建参数：带 space、focus:false，不抢视图。 */
+export function createArgs2({ space, name = '待批', mod = 'workbench-tabs' } = {}) {
+  return { space, name, mod, props: { approvals: true }, focus: false };
+}
+
+/** 红点：仅 count>0。 */
+export function tabDot(count) {
+  return Number(count) > 0;
+}
+
+/** 启动闸门：首次读账本已结束且已过 grace 才放行。 */
+export function readyGate({ startedAt = 0, firstReadAt = null, now = Date.now(), grace = 2000 } = {}) {
+  if (firstReadAt == null) return false;
+  return now - Math.max(startedAt, firstReadAt) >= grace;
+}
+
+/** 该 Space 可见的未处理行签名（不含 Space 名、不含已处理行）。 */
+export function spaceSignature({ rows, space, knownSpaces = [] } = {}) {
+  const mine = rowsForSpace(rows, space, knownSpaces).filter(r => r && !r.done);
+  if (!mine.length) return '';
+  const parts = [];
+  for (const r of mine) parts.push(r.what ?? '', r.impact ?? '', r.where ?? '', r.project ?? '', r.proposedAt ?? '', r.type ?? '');
+  return fnv(parts.join('\u0001'));
+}
+
+/** 关闭标记：签名相同且有条目 → 保留；0 条/签名变/force → 清。 */
+export function markerPlan({ marker, signature, count, force } = {}) {
+  if (!marker || !marker.signature) return { keep: false };
+  if (force) return { keep: false };
+  if (Number(count) === 0) return { keep: false };
+  if (marker.signature !== signature) return { keep: false };
+  return { keep: true };
+}
+
+/** 我们创建过的 tab id 环形缓冲（有界）。 */
+export function createdRing(prev, id, max = 20) {
+  const list = (Array.isArray(prev) ? prev : []).concat(id ? [id] : []);
+  return list.slice(-max);
+}
+
+/** 侧栏请求：TTL 内有效，过期丢弃。 */
+export function requestPlan({ request, now = Date.now(), ttl = 10000 } = {}) {
+  if (!request || typeof request !== 'object') return null;
+  if (!request.space || !request.at) return null;
+  if (now - Number(request.at) > ttl) return null;
+  return request;
+}
+
+/** 三路分流：prebuild / ensure / force；已存在时 N>0 且 settled 返回 unsettle。 */
+export function creationPlan({ tabs, panes, count, mode, markerKeep, } = {}) {
+  const all = Array.isArray(tabs) ? tabs : [];
+  const list = Array.isArray(panes) ? panes : [];
+  const paneOf = id => list.find(p => p && p.tab === id);
+  const named = all.filter(t => t && t.name === '待批');
+  const ours = named.filter(t => paneOf(t.id)?.mod === 'workbench-tabs');
+  if (ours.length) {
+    const tab = ours[0];
+    if (Number(count) > 0 && tab.settled) return 'unsettle';
+    return 'none';
+  }
+  if (named.length) return 'wait';
+  if (markerKeep) return 'none';
+  if (mode === 'force' || mode === 'prebuild') return 'create';
+  return Number(count) > 0 ? 'create' : 'none';
+}

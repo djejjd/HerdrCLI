@@ -1,7 +1,7 @@
 // 工作台标签栏：沿用 Herdr 原生行为与已核实菜单，统一状态图标。
 import { statusIcon } from './status.js';
 import { sidebarToggle } from './controls.js';
-import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, chipNode, globalCount, filterVisibleTabs, ensurePlan, settlePlan, spacePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, cleanupPlan, cleanupLogLine, retryPlan, cleanupFailureLine, rowActions, decisionEvent, chipLabel } from './pending.js';
+import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, chipNode, globalCount, filterVisibleTabs, ensurePlan, settlePlan, spacePlan, chipTarget, createArgs, createArgs2, legacyCreateArgs, createFailure, tabDot, readyGate, spaceSignature, markerPlan, createdRing, requestPlan, creationPlan, cleanupPlan, cleanupLogLine, retryPlan, cleanupFailureLine, rowActions, decisionEvent, chipLabel } from './pending.js';
 import { View, div, svg, image } from "gpui-kit";
 import * as fsPromises from "fs/promises";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
@@ -43,6 +43,16 @@ export default class Tabs extends View {
     this.createError = null;
     this.cleanupError = null;
     this.closeTries = new Map();
+    this.startedAt = Date.now();
+    this.firstReadAt = null;
+    this.ensured = new Set();
+    this.lastOurs = new Map();
+    this.prevTab = new Map();
+    this.lastSwitchAt = new Map();
+    this.pendingTabId = null;
+    this.localCount = 0;
+    this.errorText = null;
+    this.created = JSON.parse(localStorage.getItem("approvals.created") ?? "{}");
     if (_props?.approvals) {
       this.page = 0;
       this.store.refresh().then(() => { if (!this.store.closed) cx.notify(); }).catch(() => {});
@@ -117,58 +127,90 @@ export default class Tabs extends View {
       this.publishApprovals(state);
       const space = spaces().find(s => s.active);
       const tabs = space?.tabs ?? [];
-      const count = countRows(rowsForSpace(state.rows ?? [], space, spaces()));
-      const plan = spacePlan({ tabs, panes: panes(), count, isActive: true });
-      const ens = { kind: plan.ensure === "create" ? "create" : (plan.tab ? "exists" : "none"), tab: plan.tab };
-      if (ens.kind === "create") {
-        // 每个 Space 只建一次；建完立刻收起，避免抢当前视图。
-        if (!this.creating) {
-          this.creating = true;
-          const prev = tabs.find(x => x.active)?.id ?? null;
-          try {
-            run("tab.new", createArgs());
-            this.createError = null;
-          } catch {
-            // 老 build 会拒绝未知的 focus 参数：退回不带 focus，再靠 150ms 兜底切回原标签。
-            try {
-              run("tab.new", legacyCreateArgs());
-            } catch (error) {
-              const st = createFailure({ spaceId: space?.id, error });
-              this.creating = st.creating;
-              this.createError = st.createError;
-              this.logCreateFailure(st.logLine);
-              cx.notify();
-              return;
-            }
+      this.firstReadAt ??= Date.now();
+      const ready = readyGate({ startedAt: this.startedAt, firstReadAt: this.firstReadAt });
+      const act = spaces().find(x => x.active);
+      const markers = JSON.parse(localStorage.getItem("approvals.closed") ?? "{}");
+      const allSpaces = spaces();
+      const sigFor = sp => spaceSignature({ rows: state.rows ?? [], space: sp, knownSpaces: allSpaces });
+      const oursOf = tabs => (tabs ?? []).filter(t => t.name === "待批" && panes().find(p => p && p.tab === t.id)?.mod === "workbench-tabs");
+
+      // 1) 关闭检测必须先于重建：上一轮有、本轮没有，且不是 cleanup 关的（keep 仍在说明不是）
+      let markerDirty = false;
+      for (const sp of allSpaces) {
+        const ids = oursOf(sp?.tabs).map(t => t.id);
+        const prev = this.lastOurs.get(sp.id) ?? [];
+        const gone = prev.filter(id => !ids.includes(id));
+        if (gone.length && prev.length && !ids.length) {
+          markers[sp.id] = { signature: sigFor(sp), at: Date.now() };
+          markerDirty = true;
+          const target = this.prevTab.get(sp.id);
+          if (target && Date.now() - (this.lastSwitchAt.get(sp.id) ?? 0) > 5000 && (sp.tabs ?? []).some(t => t.id === target)) {
+            run("tab.select", { id: target });
           }
-          // 兜底：若这个 build 仍抢了焦点，150ms 后切回创建前的标签。
-          cx.timer.after(150, () => {
-            const t = spaces().find(s => s.active)?.tabs ?? [];
-            if (prev && t.some(x => x.active && x.name === "待批")) run("tab.select", { id: prev });
-          });
+        }
+        this.lastOurs.set(sp.id, ids);
+      }
+      if (markerDirty) localStorage.setItem("approvals.closed", JSON.stringify(markers));
+
+      // 2) 三路分流：prebuild / ensure / force；共用创建锁
+      const req = requestPlan({ request: shared("approvals.openRequest") });
+      for (const sp of allSpaces) {
+        const tabs = sp?.tabs ?? [];
+        const count = countRows(rowsForSpace(state.rows ?? [], sp, allSpaces));
+        const sig = sigFor(sp);
+        const force = req && req.space === sp.id;
+        if (force) { delete markers[sp.id]; localStorage.setItem("approvals.closed", JSON.stringify(markers)); setShared("approvals.openRequest", null); }
+        const mk = markerPlan({ marker: markers[sp.id], signature: sig, count, force });
+        let mode = null;
+        if (force) mode = "force";
+        else if (sp.id === act?.id && ready && !this.ensured.has(sp.id)) mode = "prebuild";
+        else if (count > 0) mode = "ensure";
+        if (!mode) continue;
+        const plan = creationPlan({ tabs, panes: panes(), count, mode, markerKeep: mk.keep });
+        if (plan === "unsettle") {
+          const t = (tabs ?? []).find(x => x.name === "待批");
+          if (t) this.runCleanup("unsettle", t.id, () => run("tab.unsettle", { id: t.id }));
+        }
+        if (plan === "create" && !this.creating) {
+          this.creating = true;
+          const prevActive = tabs.find(x => x.active)?.id ?? null;
+          if (prevActive) this.prevTab.set(sp.id, prevActive);
+          try {
+            run("tab.new", createArgs2({ space: sp.id }));
+            this.createError = null;
+          } catch (error) {
+            const st = createFailure({ spaceId: sp.id, error });
+            this.creating = st.creating;
+            this.createError = st.createError;
+            this.logCreateFailure(st.logLine);
+            continue;
+          }
+          const createdSpace = sp.id;
           cx.timer.after(600, () => {
             this.creating = false;
-            const sp = spaces().find(s => s.active);
-            const t = sp?.tabs ?? [];
+            const t = spaces().find(x => x.id === createdSpace)?.tabs ?? [];
             const e = ensurePlan(t, panes());
             if (e.kind !== "exists") return;
+            this.created[createdSpace] = createdRing(this.created[createdSpace], e.tab, 20);
+            localStorage.setItem("approvals.created", JSON.stringify(this.created));
+            this.logCleanup(`ensure-create space=${createdSpace} created=${e.tab} prevActive=${prevActive ?? "-"}`);
             const tab = t.find(x => x.id === e.tab);
-            this.logCleanup(`ensure-create space=${sp?.id} created=${e.tab} prevActive=${prev ?? "-"}`);
             if (!tab || tab.settled) return;
-            const count = countRows(rowsForSpace(this.store.state.rows ?? [], sp, spaces()));
-            const plan = settlePlan({ count, active: tab.active === true, settled: false });
-            if (plan === "settle") this.runCleanup("settle", e.tab, () => run("tab.settle", { id: e.tab }));
+            const c = countRows(rowsForSpace(this.store.state.rows ?? [], spaces().find(x => x.id === createdSpace), spaces()));
+            if (settlePlan({ count: c, active: tab.active === true, settled: false }) === "settle") {
+              this.runCleanup("settle", e.tab, () => run("tab.settle", { id: e.tab }));
+            }
           });
         }
-      } else if (ens.kind === "exists") {
-        for (const id of plan.settle) this.runCleanup("settle", id, () => run("tab.settle", { id }));
-        for (const id of plan.unsettle) this.runCleanup("unsettle", id, () => run("tab.unsettle", { id }));
+        this.ensured.add(sp.id);
       }
-      // 清理历史遗留：每个 Space 只留最早出现的待批标签；关 active 重复项前先切到 keep。
+
+      // 3) cleanup（历史重复；按 Space 计数）
       const plans = [];
-      for (const sp of spaces()) {
+      for (const sp of allSpaces) {
         const tabs = sp?.tabs ?? [];
-        const count = countRows(rowsForSpace(state.rows ?? [], sp, spaces()));
+        const count = countRows(rowsForSpace(state.rows ?? [], sp, allSpaces));
         const plan = cleanupPlan(tabs, panes(), count);
         if (!plan.keep) continue;
         const pendingIds = tabs.filter(t => t.name === "待批").map(t => t.id);
@@ -182,6 +224,12 @@ export default class Tabs extends View {
         for (const id of plan.settle) results.push(this.runCleanup("settle", id, () => run("tab.settle", { id })));
         this.logCleanup(`done space=${sp?.id} keep=${plan.keep} closed=${plan.close.length} settled=${plan.settle.length} failed=${results.filter(r => r === "fail").length}`);
       }
+      // 当前 Space 的展示状态（红点/空态/错误行）
+      const cur = act;
+      const curTabs = cur?.tabs ?? [];
+      this.localCount = countRows(rowsForSpace(state.rows ?? [], cur, allSpaces));
+      this.pendingTabId = oursOf(curTabs)[0]?.id ?? null;
+      this.errorText = this.createError || this.cleanupError || (state.kind === "missing" ? "账本缺失" : state.kind === "error" ? "账本解析失败" : null);
       const sig = `${state.kind}:${state.count ?? 0}:${state.rows?.length ?? 0}`;
       if (sig !== this.sig) { this.sig = sig; cx.notify(); }
     }).catch(() => {});
@@ -443,7 +491,6 @@ export default class Tabs extends View {
   render() {
     const t = theme();
     if (props()?.approvals) return this.approvalsPanel(t);
-    const chip = this.approvalChip(t);
     const space = spaces().find(p => p.active);
     // 收起的标签不渲染：固定待批标签 0 条时就在这里消失。
     const shown = filterVisibleTabs(space?.tabs ?? []);
@@ -460,7 +507,9 @@ export default class Tabs extends View {
     const item = (c, i) => {
       const program = panes().find(p => p.tab === c.id && p.program?.agent)?.program ?? panes().find(p => p.tab === c.id)?.program;
       const name = /^tb\d+$/.test(c.name) ? program?.name ?? "Terminal" : c.name;
-      return h_flex().id(`tab-${c.id}`).relative().h(30).px(8).gap(6).rounded(6).items_center().flex_none().text_size(12.5)
+      const pending = c.id === this.pendingTabId;
+      return h_flex().id(`tab-${c.id}`).relative().h(29).px(8).gap(6).rounded(6).items_center().flex_none().text_size(12.5)
+        .when(pending, el => el.min_w(72))
         // A rename or status dot on this or an earlier tab can push the active one out.
         .when(i <= active, el => el.on_size_change((_size, cx) => { this.scroll.scroll_to_item(active); cx.notify(); }))
         .bg(c.active ? t.selected : t.chrome).text_color(c.active ? t.foreground : t.muted).when(c.active, el => el.font_medium())
@@ -469,6 +518,7 @@ export default class Tabs extends View {
         .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); this.pressed = i; if (e.click_count === 2) run("tab.rename", { id: c.id }); })
         .on_mouse_up("left", () => {
           const from = this.pressed; this.pressed = null;
+          this.lastSwitchAt.set(space.id, Date.now());
           if (from !== null && from !== i) run("tab.move", { id: shown[from].id, index: space.tabs.findIndex(x => x.id === c.id) + 1 });
           else run("tab.select", { id: c.id });
         })
@@ -477,7 +527,8 @@ export default class Tabs extends View {
         .child(div().max_w(170).truncate().child(c.zoomed ? `${name} Z` : name))
         .when(c.status === "working", el => el.child(statusIcon("working",t)))
         .when(c.status === "blocked" || c.status === "done", el => el.child(statusIcon(c.status,t)))
-        .when(c.active, el => el.child(div().id(`close-${c.id}`).text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); run("tab.close", { id: c.id }); }).child(svg("mods/pane/close.svg").size(12))));
+        .when(pending && tabDot(this.localCount), el => el.child(div().size(6).rounded(3).bg(t.blocked)))
+        .when(c.active && !pending, el => el.child(div().id(`close-${c.id}`).text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); run("tab.close", { id: c.id }); }).child(svg("mods/pane/close.svg").size(12))));
     };
     const root = layout(), sidebar = find(root, "sidebar"), w = window();
     // 常驻侧栏开关：侧栏隐藏后品牌栏会一起消失，这里是唯一可见入口。
@@ -499,11 +550,10 @@ export default class Tabs extends View {
           else { run("layout.select", { stack: "panel-body", child: id }); run("layout.show", { id: "panel" }); }
         }).child(svg(icon).size(14)).child(label);
     };
-    return h_flex().size_full().min_w(0).px(12).pl(lightsPadding).gap(4).items_center().bg(t.chrome).border_b(1).border_color(t.border)
+    const tabsRow = h_flex().size_full().min_w(0).px(12).pl(lightsPadding).gap(4).items_center().bg(t.chrome).border_b(1).border_color(t.border)
       .on_mouse_up("left", () => { this.pressed = null; })
       .on_scroll_wheel(e => { if (Math.abs(e.delta.y) >= 1) run(e.delta.y > 0 ? "tab.prev" : "tab.next"); })
       .child(button("sidebar-toggle", svg(side.icon).size(14), () => run(side.command, side.args)).tooltip(side.label))
-      .when(Boolean(chip), el => el.child(chip))
       .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(2).overflow_x_scrollbar().track_scroll(this.scroll)
         .on_size_change((_size, cx) => { if (active >= 0) { this.scroll.scroll_to_item(active); cx.notify(); } })
         .children(shown.map(item)))
@@ -513,5 +563,8 @@ export default class Tabs extends View {
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/verified-tabs/win-min.svg").size(16) : "−", () => run("window.minimize")))
         .child(button("maximize", w.platform === "windows" ? svg(`mods/verified-tabs/${w.maximized ? "win-restore" : "win-max"}.svg`).size(16) : "□", () => run("window.maximize")))
         .child(button("close-window", w.platform === "windows" ? svg("mods/verified-tabs/win-close.svg").size(16) : svg("mods/pane/close.svg").size(13), () => run("window.close"))));
+    const errorLine = div().h(12).pl(lightsPadding).pr(12).text_size(10.5).text_color(t.muted)
+      .when(Boolean(this.errorText), el => el.tooltip(this.errorText).child(this.errorText));
+    return v_flex().size_full().min_w(0).child(tabsRow).child(errorLine);
   }
 }
