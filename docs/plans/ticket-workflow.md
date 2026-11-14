@@ -3,13 +3,13 @@
 状态: proposed（仅归档，不落地）
 创建: 2026-11-14
 最后更新: 2026-11-14
-关联: ~/ai/collab/work.md; ~/ai/rules.md §6; .tmp/tickets/（原型）; third-party/mattpocock-skills/
+关联: ~/ai/collab/work.md; ~/ai/rules.md §6; third-party/mattpocock-skills/
 
 ## 一、背景
 
 参考 `third-party/mattpocock-skills/` 的三个技能（to-spec / to-tickets / implement-spec），结合本项目 2026-11-14 待批页改造（15 个提交、5 轮方案评审、多次返工）的经验，整理一套可落地、可检查的工单制协作方案。
 
-本文只是方案归档；**代码与规范均未改动**。原型脚本在 `.tmp/tickets/`（20 项自测通过），未进 `~/ai`。
+本文只是方案归档；**代码与规范均未改动**。原型脚本曾放在 `.tmp/tickets/`（20 项自测通过），未进 `~/ai`，验证完成后已清理。
 
 ## 二、参考体系的内核
 
@@ -87,7 +87,7 @@ Herdr 原生「worktree 即 Space」，但 Space 在我们界面里是重量级�
 
 ## 八、原型验证结果（2026-11-14，独立 agent）
 
-产物：`.tmp/tickets/`（8 个模块，每个 ≤150 行，最长函数 36 行；20 项自测通过）。
+产物：8 个模块（每个 ≤150 行，最长函数 36 行；20 项自测通过），验证后已清理。
 
 结论：**可采纳**。
 
