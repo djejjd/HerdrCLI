@@ -5,7 +5,8 @@
 const WHAT = '要你做什么';
 const MAX_ROWS = 200;
 const MAX_CELL = 200;
-const DONE = new Set(['已处理', '已完成', 'done', 'closed']);
+// 账本会把结论写在状态后面（如「已处理（选 A）」），按前缀判定，避免把已处理算回未处理。
+const DONE_RE = /^(已处理|已完成|done|closed)(?=$|[\s（(,，;；:：])/i;
 
 /** 拆一行表格：去掉首尾竖线，转义的 \| 还原为字面竖线。null 行按空处理。 */
 export function splitRow(line) {
@@ -71,7 +72,7 @@ export function parseLedger(text) {
       where: cut(iWhere >= 0 ? cells[iWhere] : ''),
       proposedAt: cut(iAt >= 0 ? cells[iAt] : ''),
       project: cut(iProject >= 0 ? cells[iProject] : ''),
-      done: DONE.has(status.toLowerCase()),
+      done: DONE_RE.test(status.trim()),
     });
   }
   return { rows, error: null };

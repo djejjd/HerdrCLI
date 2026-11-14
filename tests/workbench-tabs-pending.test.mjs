@@ -366,3 +366,33 @@ test('shared 与本地读取的先后：谁的时间新用谁', () => {
   assert.equal(pickState(null, null), null);
   assert.equal(pickState(shared, { kind: 'hidden' }).rows[0].what, '旧', 'hidden 的本地状态不算新鲜');
 });
+
+
+test('状态带括注仍算已处理（真实账本写法）', () => {
+  const { rows } = parseLedger(led(
+    `| 甲 | 已处理（选 A，已可打开） | i | w | ${T} | P |`,
+    `| 乙 | 已处理（有下划线） | i | w | ${T} | P |`,
+    `| 丙 | 已完成 ✅ | i | w | ${T} | P |`,
+    `| 丁 | done（已合） | i | w | ${T} | P |`,
+    `| 戊 | 待用户 | i | w | ${T} | P |`,
+    `| 己 | 待处理 | i | w | ${T} | P |`,
+  ));
+  assert.equal(countRows(rows), 2, '只有戊与己算未处理');
+  assert.deepEqual(rows.filter(r => !r.done).map(r => r.what), ['戊', '己']);
+});
+
+test('真实账本样例：1 条未处理 + 带括注的已处理 + 示例行', () => {
+  const text = [
+    '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |',
+    '|---|---|---|---|---|---|',
+    `| 决定是否合并 PR #7 | 待用户 | chip 停在分支 | https://github.com/x/y/pull/7 | ${T} | HerdrCLI |`,
+    `| 跑一条 open 命令 | 已处理（选 A，已可打开） | 无法定位 | t16 | ${T} | HerdrCLI |`,
+    `| 批准回滚 | 已处理 | 界面显示假数据 | t19 | ${T} | HerdrCLI |`,
+    `| （示例）合并 PR #2 | 待用户 | 规则停在分支 | <链接> | ${T} | ai |`,
+  ].join('\n');
+  const { rows, error } = parseLedger(text);
+  assert.equal(error, null);
+  assert.equal(rows.length, 3, '示例行被跳过');
+  assert.equal(countRows(rows), 1);
+  assert.equal(rows.find(r => !r.done).what, '决定是否合并 PR #7');
+});
