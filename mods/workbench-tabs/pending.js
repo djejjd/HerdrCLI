@@ -338,50 +338,10 @@ export function decisionEvent(row, decision, now = Date.now()) {
   return `PENDING-DECISION｜${key}｜${type}｜${text}｜${at}｜${title}｜${row?.project ?? ''}`;
 }
 
-/** chip 点击去向：tracked 存活或 panes 命中当前 Space → 复用；5 秒锁内 → 等待；否则新建。 */
-export function navPlan({ panes, tabs, tracked, opening, now = Date.now(), cooldown = 5000 } = {}) {
-  const list = Array.isArray(panes) ? panes : [];
-  const ids = new Set((Array.isArray(tabs) ? tabs : []).map(t => t && t.id));
-  const mine = list.filter(p => p && ids.has(p.tab));
-  if (tracked && ids.has(tracked)) {
-    const pane = mine.find(p => p.tab === tracked);
-    return { kind: 'open', tab: tracked, pane: pane?.pane ?? null };
-  }
-  const hit = mine.find(p => p.mod === 'workbench-tabs');
-  if (hit) return { kind: 'open', tab: hit.tab, pane: hit.pane };
-  if (opening && now - Number(opening) < cooldown) return { kind: 'wait' };
-  return { kind: 'create' };
-}
 
-/** 待批标签关闭后回到哪：还在→null；prev 还在→prev；否则同 Space 首个；空→null。 */
-export function closeFocusPlan({ closing, prev, tabs } = {}) {
-  const all = Array.isArray(tabs) ? tabs.filter(t => t && t.id) : [];
-  if (all.some(t => t.id === closing)) return null;
-  const rest = all.filter(t => t.id !== closing);
-  if (prev && rest.some(t => t.id === prev)) return prev;
-  return rest[0]?.id ?? null;
-}
 
-/** 空态处理：激活只提示；最后一个标签不关（避免连 Space 一起关）；非激活且>1 才关。 */
-export function closePlan({ kind, active, tabCount, emptyStreak } = {}) {
-  if (kind !== 'empty') return 'keep';
-  if (Number(emptyStreak) < 2) return 'keep';
-  if (Number(tabCount) <= 1) return 'banner';
-  return active ? 'banner' : 'close';
-}
 
-/** 创建提示：出现清除；run 抛错立刻失败；5 秒没出现算超时。 */
-export function creationHint({ appearing, failed, opening, now = Date.now(), timeout = 5000 } = {}) {
-  if (appearing) return null;
-  if (failed) return 'failed';
-  if (opening && now - Number(opening) >= timeout) return 'timeout';
-  return null;
-}
 
-/** 连续空态计数：只有成功解析出的 empty 才累加，其它状态清零。 */
-export function nextEmptyStreak(prev, kind) {
-  return kind === 'empty' ? (Number(prev) || 0) + 1 : 0;
-}
 
 /** chip 正文：只给数字或 ?；隐藏态返回空串（chip 不渲染）。 */
 export function chipLabel(state) {
@@ -389,4 +349,31 @@ export function chipLabel(state) {
   if (s.kind === 'hidden') return '';
   if (s.kind === 'missing' || s.kind === 'error') return '?';
   return String(s.count);
+}
+
+/** 标签栏只渲染未收起的标签；顺序不变。 */
+export function filterVisibleTabs(tabs) {
+  return (Array.isArray(tabs) ? tabs : []).filter(t => t && !t.settled);
+}
+
+/** 每个 Space 的固定待批标签：没有→create；有（可能多个）→收编第一个，其余不动。 */
+export function ensurePlan(tabs) {
+  const pending = (Array.isArray(tabs) ? tabs : []).filter(t => t && t.name === '待批');
+  if (!pending.length) return { kind: 'create' };
+  return { kind: 'exists', tab: pending[0].id, extras: pending.length - 1 };
+}
+
+/** 0 条：非激活收起，激活只提示；>0 不收起。 */
+export function settlePlan({ count, active } = {}) {
+  if (Number(count) > 0) return 'keep';
+  return active ? 'banner' : 'settle';
+}
+
+/** chip 点击目标：只找已有待批标签（pane 或名字），找不到返回 null；绝不新建。 */
+export function chipTarget({ panes, tabs } = {}) {
+  const ids = new Set((Array.isArray(tabs) ? tabs : []).map(t => t && t.id));
+  const hit = (Array.isArray(panes) ? panes : []).find(p => p && p.mod === 'workbench-tabs' && ids.has(p.tab));
+  if (hit) return hit.tab;
+  const named = (Array.isArray(tabs) ? tabs : []).find(t => t && t.name === '待批');
+  return named ? named.id : null;
 }

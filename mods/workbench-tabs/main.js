@@ -1,7 +1,7 @@
 // 工作台标签栏：沿用 Herdr 原生行为与已核实菜单，统一状态图标。
 import { statusIcon } from './status.js';
 import { sidebarToggle } from './controls.js';
-import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, pickApprovalsPane, chipNode, globalCount, navPlan, closeFocusPlan, closePlan, creationHint, nextEmptyStreak, rowActions, decisionEvent, chipLabel } from './pending.js';
+import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, pickApprovalsPane, chipNode, globalCount, filterVisibleTabs, ensurePlan, settlePlan, chipTarget, rowActions, decisionEvent, chipLabel } from './pending.js';
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, props, home, exec, readTextFile, hc } from "herdr";
@@ -37,17 +37,8 @@ export default class Tabs extends View {
     this.published = "";
     this.sent = "";
     this.decisionError = null;
-    this.approvalsTab = null;
-    this.opening = 0;
-    this.createError = null;
-    this.createFailed = false;
-    this.restoreTo = null;
-    this.approvalsActive = false;
-    this.emptyStreak = 0;
-    this.closedTab = null;
-    this.watchTimer = null;
+    this.creating = false;
     if (_props?.approvals) {
-      // 标签页：2 秒刷新列表；不自己关自己，关闭由 chip 侧按规则处理。
       this.page = 0;
       this.store.refresh().then(() => { if (!this.store.closed) cx.notify(); }).catch(() => {});
       this.timer = cx.timer.every(2000, c => {
@@ -60,63 +51,10 @@ export default class Tabs extends View {
     this.pollApprovals(cx);
   }
 
-  // 待批标签在时每 500ms 查一次：确认存在、记录是否激活、被外部关闭后恢复焦点。
-  ensureWatch(cx) {
-    if (this.watchTimer) return;
-    this.watchTimer = cx.timer.every(500, () => this.trackApprovalsTab());
-  }
-
-  stopWatch() {
-    this.watchTimer?.cancel?.();
-    this.watchTimer = null;
-  }
-
   close() {
     this.store?.close();
     this.timer?.cancel?.();
     this.timer = null;
-    this.stopWatch();
-  }
-
-  trackApprovalsTab() {
-    const space = spaces().find(s => s.active);
-    const tabs = space?.tabs ?? [];
-    const pane = pickApprovalsPane(panes(), tabs);
-    if (pane) {
-      this.approvalsTab = pane.tab;
-      this.opening = 0;
-      this.createFailed = false;
-      this.createError = null;
-      this.approvalsActive = tabs.find(t => t.active)?.id === pane.tab;
-      return;
-    }
-    if (this.approvalsTab && !tabs.some(t => t.id === this.approvalsTab)) {
-      const wasActive = this.approvalsActive;
-      const target = closeFocusPlan({ closing: this.approvalsTab, prev: this.restoreTo, tabs });
-      this.approvalsTab = null;
-      this.approvalsActive = false;
-      this.restoreTo = null;
-      this.stopWatch();
-      if (wasActive && target) run("tab.select", { id: target });
-      return;
-    }
-    const hint = creationHint({ appearing: false, failed: this.createFailed, opening: this.opening, now: Date.now() });
-    if (hint === "failed") { this.createError = "创建待批标签失败，请重试"; this.createFailed = false; this.opening = 0; this.stopWatch(); }
-    else if (hint === "timeout") { this.createError = "没能创建待批标签，请再点一次"; this.opening = 0; this.stopWatch(); }
-  }
-
-  // 0 条：激活的只提示；最后一个标签不关（避免连 Space 一起关）；非激活且>1 才关。
-  maybeCloseApprovals(state) {
-    if (props()?.approvals) return;
-    const space = spaces().find(s => s.active);
-    const tabs = space?.tabs ?? [];
-    const pane = pickApprovalsPane(panes(), tabs);
-    if (!pane) return;
-    const active = tabs.find(t => t.active)?.id === pane.tab;
-    const plan = closePlan({ kind: state.kind, active, tabCount: tabs.length, emptyStreak: this.emptyStreak });
-    if (plan !== "close" || this.closedTab === pane.tab) return;
-    this.closedTab = pane.tab;
-    run("tab.close", { id: pane.tab, confirmed: true });
   }
 
   // 账本路径：默认全局账本；fixture 覆盖仅在有效期内且指向临时目录时生效，非法/过期立刻清掉。
@@ -136,13 +74,36 @@ export default class Tabs extends View {
       if (this.store.closed) return;
       const state = this.store.state;
       this.pruneAcks(state.rows ?? []);
-      this.emptyStreak = nextEmptyStreak(this.emptyStreak, state.kind);
-      if (state.kind !== "empty") this.closedTab = null;
       this.publishApprovals(state);
-      this.maybeCloseApprovals(state);
       const space = spaces().find(s => s.active);
-      if (pickApprovalsPane(panes(), space?.tabs ?? [])) this.ensureWatch(cx);
-      const sig = `${state.kind}:${state.count ?? 0}:${state.reason ?? ""}:${state.rows?.length ?? 0}`;
+      const tabs = space?.tabs ?? [];
+      const ens = ensurePlan(tabs);
+      if (ens.kind === "create") {
+        // 每个 Space 只建一次；建完立刻收起，避免抢当前视图。
+        if (!this.creating) {
+          this.creating = true;
+          try {
+            run("tab.new", { name: "待批", mod: "workbench-tabs", props: { approvals: true } });
+          } catch {
+            this.creating = false;
+            return;
+          }
+          cx.timer.after(600, () => {
+            this.creating = false;
+            const t = spaces().find(s => s.active)?.tabs ?? [];
+            const e = ensurePlan(t);
+            if (e.kind === "exists") {
+              const tab = t.find(x => x.id === e.tab);
+              if (tab && !tab.settled) run("tab.settle", { id: e.tab });
+            }
+          });
+        }
+      } else {
+        const tab = tabs.find(x => x.id === ens.tab);
+        const count = countRows(rowsForSpace(state.rows ?? [], space, spaces()));
+        if (settlePlan({ count, active: tab?.active === true }) === "settle") run("tab.settle", { id: ens.tab });
+      }
+      const sig = `${state.kind}:${state.count ?? 0}:${state.rows?.length ?? 0}`;
       if (sig !== this.sig) { this.sig = sig; cx.notify(); }
     }).catch(() => {});
   }
@@ -196,7 +157,6 @@ export default class Tabs extends View {
   }
 
   hint(s) {
-    if (this.createError) return this.createError;
     const where = this.ledgerPath();
     if (s.kind === "missing") return `账本缺失：${where}`;
     if (s.kind === "error") return `账本无法解析（${REASONS[s.reason] ?? s.reason}）：${where}`;
@@ -223,32 +183,11 @@ export default class Tabs extends View {
       .tooltip(bad ? "待批账本有问题，点击查看" : `待审批 ${s.count} 条，点击打开待批页面`)
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click((_e, cx) => {
+        cx.stopPropagation?.();
         cx.stop_propagation();
         const space = spaces().find(s => s.active);
-        const tabs = space?.tabs ?? [];
-        const plan = navPlan({ panes: panes(), tabs, tracked: this.approvalsTab, opening: this.opening });
-        if (plan.kind === "wait") return;
-        // 记下从哪个会话进来的，待批标签关掉后回到这里。
-        const nowActive = tabs.find(t => t.active)?.id ?? null;
-        if (nowActive && plan.tab !== nowActive) this.restoreTo = nowActive;
-        this.ensureWatch(cx);
-        if (plan.kind === "open") {
-          this.approvalsTab = plan.tab;
-          run("tab.select", { id: plan.tab });
-          if (plan.pane) run("pane.focus", { pane: plan.pane });
-          return;
-        }
-        this.opening = Date.now();
-        this.createError = null;
-        this.createFailed = false;
-        try {
-          run("tab.new", { name: "待批", mod: "workbench-tabs", props: { approvals: true } });
-        } catch {
-          this.createFailed = true;
-          this.createError = "创建待批标签失败，请重试";
-          this.opening = 0;
-          this.stopWatch();
-        }
+        const id = chipTarget({ panes: panes(), tabs: space?.tabs ?? [] });
+        if (id) run("tab.select", { id });
       })
       .child(statusIcon(bad ? "idle" : "blocked", t))
       .child(div().text_size(11).font_semibold().child(chipLabel(s)));
@@ -419,7 +358,8 @@ export default class Tabs extends View {
     if (props()?.approvals) return this.approvalsPanel(t);
     const chip = this.approvalChip(t);
     const space = spaces().find(p => p.active);
-    const shown = space?.tabs ?? [];
+    // 收起的标签不渲染：固定待批标签 0 条时就在这里消失。
+    const shown = filterVisibleTabs(space?.tabs ?? []);
     const active = shown.findIndex(tab => tab.active);
     const selected = shown[active]?.id;
     if (selected !== this.selected || active !== this.selectedIndex) {
