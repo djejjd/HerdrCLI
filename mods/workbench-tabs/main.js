@@ -105,6 +105,17 @@ export default class Tabs extends View {
     try { fsPromises.appendFile(`${appHome()}/approvals-cleanup.log`, `${line}\n`).catch(() => {}); } catch {}
   }
 
+  // 唯一创建入口：不带 focus；建后 150ms 若抢了焦点就切回原标签。
+  createApprovalsTab(spaceId, cx) {
+    const prev = (spaces().find(s => s.id === spaceId)?.tabs ?? []).find(t => t.active)?.id ?? null;
+    run("tab.new", createArgs2({ space: spaceId }));
+    cx.timer.after(150, () => {
+      const t = spaces().find(s => s.id === spaceId)?.tabs ?? [];
+      if (prev && t.some(x => x.active && x.name === "待批")) run("tab.select", { id: prev });
+    });
+    return prev;
+  }
+
   // 侧栏点击：清 marker → 已有则展开/选中；没有则建，建完选中（select 自带展开）。
   consumeRequest(cx) {
     const req = requestPlan({ request: shared("approvals.openRequest") });
@@ -130,7 +141,7 @@ export default class Tabs extends View {
       return;
     }
     try {
-      run("tab.new", createArgs2({ space: req.space }));
+      this.createApprovalsTab(req.space, cx);
     } catch (error) {
       const msg = String(error?.message ?? error).split("\n")[0].slice(0, 80);
       this.cleanupError = `打开失败：${msg}`;
@@ -247,7 +258,7 @@ export default class Tabs extends View {
           const prevActive = tabs.find(x => x.active)?.id ?? null;
           if (prevActive) this.prevTab.set(sp.id, prevActive);
           try {
-            run("tab.new", createArgs2({ space: sp.id }));
+            this.createApprovalsTab(sp.id, cx);
             this.createError = null;
           } catch (error) {
             localStorage.removeItem("approvals.createLock");
@@ -658,7 +669,7 @@ export default class Tabs extends View {
           this.paneMissing.delete(spaces().find(s => s.active)?.id);
           this.rebuildId = null;
           const ap = spaces().find(s => s.active);
-          if (ap) run("tab.new", createArgs2({ space: ap.id }));
+          if (ap) { try { this.createApprovalsTab(ap.id, cx); } catch { /* 错误行下一轮给出 */ } }
         })
         .child(div().child("重建"))));
     return v_flex().size_full().min_w(0).child(tabsRow).child(errorLine);

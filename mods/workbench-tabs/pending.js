@@ -382,9 +382,9 @@ export function chipTarget({ panes, tabs } = {}) {
   return hit ? hit.tab : null;
 }
 
-/** 新建待批标签的参数：focus:false，绝不抢当前视图。 */
+/** 新建待批标签的参数：不传 focus（本 build 不接受），由调用方建后切回。 */
 export function createArgs({ name = '待批', mod = 'workbench-tabs' } = {}) {
-  return { name, mod, props: { approvals: true }, focus: false };
+  return { name, mod, props: { approvals: true } };
 }
 
 /** 老 build 不认识 focus 参数时的兜底：不带 focus，由调用方把焦点切回来。 */
@@ -397,7 +397,7 @@ export function createFailure({ spaceId, error, now = Date.now() } = {}) {
   const msg = String(error?.message ?? error ?? 'unknown').split('\n')[0].slice(0, 80);
   return {
     creating: false,
-    createError: `没能创建待批标签：${msg}`,
+    createError: `打开失败：${msg}`,
     logLine: `${new Date(now).toISOString()} space=${spaceId ?? '?'} error=${msg}`,
   };
 }
@@ -455,9 +455,9 @@ export function spacePlan({ tabs, panes, count, isActive } = {}) {
   return out;
 }
 
-/** 预建/按需创建参数：带 space、focus:false，不抢视图。 */
+/** 预建/按需创建参数：带 space；不传 focus，由 helper 建后切回。 */
 export function createArgs2({ space, name = '待批', mod = 'workbench-tabs' } = {}) {
-  return { space, name, mod, props: { approvals: true }, focus: false };
+  return { space, name, mod, props: { approvals: true } };
 }
 
 /** 红点：仅 count>0。 */

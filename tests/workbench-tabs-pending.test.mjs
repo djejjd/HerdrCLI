@@ -570,9 +570,9 @@ test('chipTarget：只认本 mod pane，名字不算数；连续 5 次稳定', (
   assert.equal(chipTarget({ panes: [], tabs }), null);
   assert.equal(chipTarget({ panes: [], tabs: [{ id: 'm' }] }), null);
 });
-test('ensure 创建参数：focus:false，不抢当前视图', () => {
+test('ensure 创建参数：不含 focus（这个 build 不接受）', () => {
   const a = createArgs();
-  assert.equal(a.focus, false);
+  assert.equal('focus' in a, false);
   assert.equal(a.name, '待批');
   assert.equal(a.mod, 'workbench-tabs');
   assert.deepEqual(a.props, { approvals: true });
@@ -606,7 +606,7 @@ test('两次创建都抛错：creating 复位、createError 非空、日志行�
     }
   }
   assert.equal(creating, false);
-  assert.match(err, /^没能创建待批标签：/);
+  assert.match(err, /^打开失败：/);
   assert.match(log, /space=sp1/);
   assert.match(log, /no space yet/);
   assert.equal(log.includes('决定是否合并'), false, '日志不记账本正文');
@@ -722,10 +722,10 @@ test('spacePlan：只有当前 Space 新建；有数收起则展；0 条非激�
 });
 
 
-test('createArgs2：带 space、focus:false', () => {
+test('createArgs2：带 space、无 focus 键', () => {
   const a = createArgs2({ space: 'sp1' });
   assert.equal(a.space, 'sp1');
-  assert.equal(a.focus, false);
+  assert.equal('focus' in a, false);
   assert.equal(a.name, '待批');
 });
 
@@ -843,8 +843,18 @@ test('静态：消费端先做后清、写 lastOpen 结果；侧栏点击也留�
   assert.match(body, /ok-existing/);
   assert.match(body, /ok-created/);
   // 消费开始时先记 note("consuming")，再做动作
-  assert.ok(body.indexOf('note("consuming"') < body.indexOf('run("tab.new"'));
+  assert.ok(body.indexOf('note("consuming"') < body.indexOf('createApprovalsTab('));
   const side = readFileSync(new URL('../mods/agent-workbench/main.js', import.meta.url), 'utf8');
   assert.match(side, /approvals\.lastOpen/);
   assert.match(side, /stage:'click'/);
+});
+
+
+test('静态：所有创建路径都走 createApprovalsTab，且无 focus 参数', () => {
+  const main = readFileSync(new URL('../mods/workbench-tabs/main.js', import.meta.url), 'utf8');
+  const direct = (main.match(/run\("tab\.new"/g) ?? []).length;
+  assert.ok(direct <= 1, '只允许 helper 内部出现一次 run tab.new');
+  assert.ok((main.match(/createApprovalsTab\(/g) ?? []).length >= 4, '四条路径都要调 helper');
+  assert.equal(/focus\s*:/.test(main), false);
+  assert.equal(/focus\s*:/.test(readFileSync(new URL('../mods/workbench-tabs/pending.js', import.meta.url), 'utf8')), false);
 });
