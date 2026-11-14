@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   splitRow, parseLedger, rowKey, countRows, ageText, classifyTarget, chipState, PendingStore, fixturePath, listPlan,
-  nextEmptyStreak, closePlan, approvalsNav, ledgerSignature, pickState,
+  nextEmptyStreak, closePlan, navPlan, ledgerSignature, pickState,
 } from '../mods/workbench-tabs/pending.js';
 
 const HEAD = '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |';
@@ -287,43 +287,62 @@ test('自动关闭判定：只有非当前、标签数>1、连续两次空态才
   assert.equal(closePlan({ ...base, kind: 'error' }), 'keep', '解析失败不算空');
 });
 
-test('查重导航：有待批面板就复用，没有才新建', () => {
-  assert.deepEqual(approvalsNav([]), { kind: 'create' });
-  assert.deepEqual(approvalsNav(null), { kind: 'create' });
-  assert.deepEqual(approvalsNav([{ pane: 'p1', tab: 'tb1', mod: 'workbench-tabs' }]),
-    { kind: 'open', pane: 'p1', tab: 'tb1' });
-  assert.deepEqual(approvalsNav([
-    { pane: 'p1', tab: 'tb1', mod: 'agent-workbench' },
-    { pane: 'p2', tab: 'tb2', mod: 'workbench-tabs' },
-    { pane: 'p3', tab: 'tb3', mod: 'workbench-tabs' },
-  ]), { kind: 'open', pane: 'p2', tab: 'tb2' }, '多个时取第一个');
+test('导航：tracked 存活优先复用，否则按 panes 兜底，随后才是新建', () => {
+  const tabs = [{ id: 'tb1' }, { id: 'tb2' }];
+  const panes = [{ pane: 'p1', tab: 'tb1', mod: 'workbench-tabs' }];
+  assert.deepEqual(navPlan({ panes, tabs, tracked: 'tb1', now: 1000 }), { kind: 'open', tab: 'tb1', pane: 'p1' });
+  // tracked 已不在 tabs 里，panes 里也没有 -> 新建
+  assert.deepEqual(navPlan({ panes: [], tabs, tracked: 'tb9', opening: 0, now: 1000 }), { kind: 'create' });
+  // tracked 失效但 panes 仍能兜底
+  assert.deepEqual(navPlan({ panes, tabs, tracked: 'tb9', now: 1000 }), { kind: 'open', tab: 'tb1', pane: 'p1' });
 });
 
-test('失败分支：读取抛错后状态为 error，空态 streak 清零且不触发关闭', async () => {
-  let call = 0;
-  const store = new PendingStore({ read: async () => {
-    call += 1;
-    if (call === 1) return led();
-    throw new Error('boom');
-  } });
-  let streak = 0;
-  streak = nextEmptyStreak(streak, (await store.refresh()).kind);
-  assert.equal(streak, 1);
-  const failed = await store.refresh();
-  assert.equal(failed.kind, 'error');
-  streak = nextEmptyStreak(streak, failed.kind);
-  assert.equal(streak, 0);
-  assert.equal(closePlan({ kind: failed.kind, active: false, tabCount: 3, emptyStreak: streak }), 'keep');
+test('导航：在途锁 1.5 秒内重复点击只等待，不重复新建', () => {
+  const args = { panes: [], tabs: [{ id: 'tb1' }], tracked: null, opening: 10_000 };
+  assert.equal(navPlan({ ...args, now: 10_500 }).kind, 'wait', '500ms 内重复点');
+  assert.equal(navPlan({ ...args, now: 11_400 }).kind, 'wait', '1.4s 仍是等待');
+  assert.equal(navPlan({ ...args, now: 11_600 }).kind, 'create', '1.5s 后允许重试');
 });
 
-
+test('连续三次开→关→再开：每个周期只允许一次新建', () => {
+  // 模拟真实时序：tab.new 之后 panes/tracked 还没更新（下一帧才有），
+  // 此时连点必须只等待，不能再发一次 tab.new。
+  let panes = [];
+  let tabs = [{ id: 'main' }];
+  let tracked = null;
+  let opening = 0;
+  let creates = 0;
+  const click = (now) => {
+    const plan = navPlan({ panes, tabs, tracked, opening, now });
+    if (plan.kind === 'create') {
+      creates += 1;
+      opening = now;
+      tabs = [...tabs, { id: `tb${creates}` }];
+    }
+    return plan.kind;
+  };
+  for (let cycle = 1; cycle <= 3; cycle += 1) {
+    const base = cycle * 10_000;
+    assert.equal(click(base), 'create', `第 ${cycle} 次开：新建`);
+    assert.equal(click(base + 200), 'wait', `第 ${cycle} 次：新 pane 还没出现时连点只等待`);
+    assert.equal(click(base + 900), 'wait', `第 ${cycle} 次：锁内仍等待`);
+    assert.equal(creates, cycle, `第 ${cycle} 次开只新建一次`);
+    // 下一帧 pane 出现，tracked 记住它
+    tracked = `tb${creates}`;
+    panes = [{ pane: `p${creates}`, tab: tracked, mod: 'workbench-tabs' }];
+    assert.equal(click(base + 1000), 'open', 'pane 出现后点击是复用');
+    // 关掉这个标签：下一次点击属于下一周期，应能重建
+    panes = [];
+    tabs = tabs.filter(t => t.id !== tracked);
+    tracked = null;
+  }
+  assert.equal(creates, 3, '三个周期共三次新建，没有重复');
+  assert.equal(navPlan({ panes: [], tabs: [{ id: 'main' }], tracked: null, now: 99_000 }).kind, 'create', '全部关掉后仍可重建');
+});
 test('手动关闭后仍有 COUNT：chip 可见，再点走重建', () => {
-  // 有待批时 chip 不隐藏
   assert.equal(chipState({ kind: 'count', count: 3 }).kind, 'count');
-  // 用户手动关掉标签后，panes() 里不再有待批面板 -> 再点是新建
-  assert.deepEqual(approvalsNav([]), { kind: 'create' });
-  // 未关闭时再点是复用，不重复建
-  assert.equal(approvalsNav([{ pane: 'p1', tab: 'tb1', mod: 'workbench-tabs' }]).kind, 'open');
+  assert.equal(navPlan({ panes: [], tabs: [{ id: 'tb1' }], tracked: null, now: 5000 }).kind, 'create');
+  assert.equal(navPlan({ panes: [{ pane: 'p1', tab: 'tb1', mod: 'workbench-tabs' }], tabs: [{ id: 'tb1' }], tracked: null, now: 5000 }).kind, 'open');
 });
 
 

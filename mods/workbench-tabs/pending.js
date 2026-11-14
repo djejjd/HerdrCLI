@@ -238,10 +238,19 @@ export function closePlan({ kind, active, tabCount, emptyStreak }) {
   return active ? 'banner' : 'close';
 }
 
-/** chip 点击的去向：已有待批面板就复用（返回其 pane/tab），否则新建标签。 */
-export function approvalsNav(panesList) {
-  const hit = (Array.isArray(panesList) ? panesList : []).find(p => p && p.mod === 'workbench-tabs');
-  return hit ? { kind: 'open', pane: hit.pane, tab: hit.tab } : { kind: 'create' };
+/** chip 点击的去向：优先复用已跟踪且仍存活的标签，其次 panes 兜底，
+ *  最后才新建；创建后在途锁内重复点击只返回 wait，避免连点建出两个标签。 */
+export function navPlan({ panes, tabs, tracked, opening, now = Date.now(), cooldown = 1500 } = {}) {
+  const list = Array.isArray(panes) ? panes : [];
+  const alive = Boolean(tracked) && (Array.isArray(tabs) ? tabs : []).some(t => t && t.id === tracked);
+  if (alive) {
+    const pane = list.find(p => p && p.tab === tracked);
+    return { kind: 'open', tab: tracked, pane: pane?.pane ?? null };
+  }
+  const hit = list.find(p => p && p.mod === 'workbench-tabs');
+  if (hit) return { kind: 'open', tab: hit.tab, pane: hit.pane };
+  if (opening && now - Number(opening) < cooldown) return { kind: 'wait' };
+  return { kind: 'create' };
 }
 
 const fnv = (text) => {

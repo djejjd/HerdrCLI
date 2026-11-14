@@ -1,7 +1,7 @@
 // 工作台标签栏：沿用 Herdr 原生行为与已核实菜单，统一状态图标。
 import { statusIcon } from './status.js';
 import { sidebarToggle } from './controls.js';
-import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, nextEmptyStreak, closePlan, approvalsNav, ledgerSignature, pickState } from './pending.js';
+import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, nextEmptyStreak, closePlan, navPlan, ledgerSignature, pickState } from './pending.js';
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, props, home, exec, readTextFile } from "herdr";
@@ -38,6 +38,9 @@ export default class Tabs extends View {
     this.emptyStreak = 0;
     this.closedTab = null;
     this.published = "";
+    this.approvalsTab = null;
+    this.opening = 0;
+    this.createError = null;
     if (_props?.approvals) {
       // 待批标签：读一次拿首屏，之后靠 shared 更新，不自己轮询、也不触发关闭。
       this.page = 0;
@@ -74,6 +77,7 @@ export default class Tabs extends View {
       this.pruneAcks(state.rows ?? []);
       this.emptyStreak = nextEmptyStreak(this.emptyStreak, state.kind);
       if (state.kind !== "empty") this.closedTab = null;
+      this.trackApprovalsTab();
       this.publishApprovals(state);
       this.maybeCloseApprovals(state);
       const sig = `${state.kind}:${state.count ?? 0}:${state.reason ?? ""}:${state.rows?.length ?? 0}`;
@@ -96,7 +100,19 @@ export default class Tabs extends View {
     });
   }
 
-  // 自动关闭：只由轮询调用（不在 render 里），且只在非当前、同空间标签数 >1、连续两次空态时关。
+  // 跟踪待批标签的 tab id：找到就记住；消失就清空；创建后 5 秒仍没有则提示，不重复创建。
+  trackApprovalsTab() {
+    const pane = panes().find(p => p && p.mod === "workbench-tabs");
+    if (pane) { this.approvalsTab = pane.tab; this.opening = 0; this.createError = null; return; }
+    const tabs = spaces().find(s => s.active)?.tabs ?? [];
+    if (this.approvalsTab && !tabs.some(t => t.id === this.approvalsTab)) this.approvalsTab = null;
+    if (this.opening && Date.now() - this.opening > 5000) {
+      this.opening = 0;
+      this.createError = "没能创建待批标签，请再点一次";
+    }
+  }
+
+  // 自动关闭：只由轮询调用（不在 render 里），且只在非当前、同空间标签数 >1、连续两次连续空态时关。
   maybeCloseApprovals(state) {
     if (props()?.approvals) return;
     const pane = panes().find(p => p && p.mod === "workbench-tabs");
@@ -144,6 +160,7 @@ export default class Tabs extends View {
   }
 
   hint(s) {
+    if (this.createError) return this.createError;
     const where = this.ledgerPath();
     if (s.kind === "missing") return `账本缺失：${where}`;
     if (s.kind === "error") return `账本无法解析（${REASONS[s.reason] ?? s.reason}）：${where}`;
@@ -160,10 +177,19 @@ export default class Tabs extends View {
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click((_e, cx) => {
         cx.stop_propagation();
-        // 已有待批标签就切过去；没有才新建。重复点击不会重复建。
-        const nav = approvalsNav(panes());
-        if (nav.kind === "open") { run("tab.select", { id: nav.tab }); run("pane.focus", { pane: nav.pane }); }
-        else run("tab.new", { name: "待批", mod: "workbench-tabs", props: { approvals: true } });
+        // 已有待批标签就切过去；创建后在途锁内连点只等待，避免建出两个。
+        const space = spaces().find(s => s.active);
+        const plan = navPlan({ panes: panes(), tabs: space?.tabs ?? [], tracked: this.approvalsTab, opening: this.opening });
+        if (plan.kind === "wait") return;
+        if (plan.kind === "open") {
+          this.approvalsTab = plan.tab;
+          run("tab.select", { id: plan.tab });
+          if (plan.pane) run("pane.focus", { pane: plan.pane });
+          return;
+        }
+        this.opening = Date.now();
+        this.createError = null;
+        run("tab.new", { name: "待批", mod: "workbench-tabs", props: { approvals: true } });
       })
       .child(statusIcon(bad ? "idle" : "blocked", t))
       .child(div().text_size(12).font_medium().child(bad ? "待批 ?" : `待批 ${s.count}`));
