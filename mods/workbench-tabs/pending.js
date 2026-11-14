@@ -54,7 +54,7 @@ export function parseLedger(text) {
   if (at(WHAT) < 0) return { rows: [], error: 'no-what' };
   // 状态列必填：没有它就无法区分未处理与已处理，不能猜。
   if (at('状态') < 0) return { rows: [], error: 'no-status' };
-  const iWhat = at(WHAT), iImpact = at('不做会怎样'), iWhere = at('去哪点');
+  const iWhat = at(WHAT), iImpact = at('不做会怎样'), iWhere = at('去哪点'), iSpace = at('Space');
   const iAt = at('提出时间'), iProject = at('项目'), iStatus = at('状态');
   const rows = [];
   for (let i = start; i < lines.length && rows.length < MAX_ROWS; i += 1) {
@@ -72,6 +72,8 @@ export function parseLedger(text) {
       impact: cut(iImpact >= 0 ? cells[iImpact] : ''),
       where: cut(iWhere >= 0 ? cells[iWhere] : ''),
       proposedAt: cut(iAt >= 0 ? cells[iAt] : ''),
+      // 缺 Space 列或空格子 = 全局，所有 Space 都显示（安全侧）。
+      space: cut(iSpace >= 0 ? cells[iSpace] : ''),
       project: cut(iProject >= 0 ? cells[iProject] : ''),
       done: DONE_RE.test(status.trim()),
     });
@@ -303,4 +305,16 @@ export function creationHint({ appearing, failed, opening, now = Date.now(), tim
   if (failed) return 'failed';
   if (opening && now - Number(opening) >= timeout) return 'timeout';
   return null;
+}
+
+/** 当前 Space 可见的待批行：全局（空格子）恒显示，其余按 Space 名或 id 精确匹配。 */
+export function rowsForSpace(rows, space) {
+  const list = Array.isArray(rows) ? rows : [];
+  const name = typeof space?.name === 'string' ? space.name.trim() : '';
+  const id = typeof space?.id === 'string' ? space.id.trim() : '';
+  return list.filter((r) => {
+    const at = String(r?.space ?? '').trim();
+    if (!at) return true;
+    return (name && at === name) || (id && at === id);
+  });
 }

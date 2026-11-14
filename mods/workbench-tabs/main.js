@@ -1,7 +1,7 @@
 // 工作台标签栏：沿用 Herdr 原生行为与已核实菜单，统一状态图标。
 import { statusIcon } from './status.js';
 import { sidebarToggle } from './controls.js';
-import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, nextEmptyStreak, closePlan, navPlan, ledgerSignature, pickState, closeFocusPlan, creationHint } from './pending.js';
+import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, nextEmptyStreak, closePlan, navPlan, ledgerSignature, pickState, closeFocusPlan, creationHint, rowsForSpace } from './pending.js';
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, props, home, exec, readTextFile } from "herdr";
@@ -210,11 +210,22 @@ export default class Tabs extends View {
     return `待批 ${s.count} 条 · 账本 ${where}`;
   }
 
+  // 当前 Space 的待批状态：全局行恒算，本 Space 行按名或 id 匹配；0 条即隐藏。
+  localApprovals() {
+    const state = this.store?.state;
+    if (!state || state.kind !== "count") return state ?? { kind: "hidden" };
+    const rows = rowsForSpace(state.rows ?? [], spaces().find(s => s.active));
+    const count = countRows(rows);
+    return count > 0 ? { kind: "count", count, rows } : { kind: "hidden" };
+  }
+
   approvalChip(t) {
-    const s = chipState(this.store?.state);
-    if (s.kind === "hidden") return null;
+    // 固定槽位：0 条时渲染等宽透明占位，切 Space 时标签排布不跳。
+    const slot = (child) => h_flex().id("approvals-slot").w(72).h(26).flex_none().items_center().justify_center().child(child);
+    const s = chipState(this.localApprovals());
+    if (s.kind === "hidden") return slot(null);
     const bad = s.kind === "missing" || s.kind === "error";
-    return h_flex().id("approvals-chip").h(26).px(7).gap(5).flex_none().items_center().rounded(6)
+    return slot(h_flex().id("approvals-chip").h(26).px(7).gap(5).flex_none().items_center().rounded(6)
       .bg(t.hover).text_color(bad ? t.dim : t.blocked).cursor_pointer()
       .tooltip(this.hint(s))
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
@@ -248,7 +259,7 @@ export default class Tabs extends View {
         }
       })
       .child(statusIcon(bad ? "idle" : "blocked", t))
-      .child(div().text_size(12).font_medium().child(bad ? "待批 ?" : `待批 ${s.count}`));
+      .child(div().text_size(12).font_medium().child(bad ? "待批 ?" : `待批 ${s.count}`)));
   }
 
   approvalRow(r, t) {
@@ -260,7 +271,7 @@ export default class Tabs extends View {
         .child(div().text_size(11).text_color(t.dim).child(ageText(r))))
       .when(Boolean(r.impact), el => el.child(div().text_size(11.5).text_color(t.muted).truncate().child(`不做会怎样：${r.impact}`)))
       .child(h_flex().gap(6).items_center()
-        .when(Boolean(r.project), el => el.child(div().text_size(11).text_color(t.dim).child(r.project)))
+        .child(div().text_size(11).text_color(t.dim).child(r.space ? (r.project || r.space) : "全局"))
         .child(div().flex_1())
         .child(h_flex().h(20).px(6).items_center().rounded(5).cursor_pointer().bg(t.hover)
           .on_click((_e, cx) => { cx.stop_propagation(); this.toggleAck(key); cx.notify(); })
@@ -328,8 +339,8 @@ export default class Tabs extends View {
         .child(div().p(10).text_size(12).text_color(t.muted).child(hint))
         .child(div().text_size(10.5).text_color(t.dim).px(2).truncate().tooltip(path).child(path));
     }
-    // 已完成是终态：不进入列表，也不参与页数。
-    const rows = (state.rows ?? []).filter(r => !r.done);
+    // 只看当前 Space 可见的行（全局 + 本 Space），已完成是终态不参与。
+    const rows = rowsForSpace(state.rows ?? [], spaces().find(s => s.active)).filter(r => !r.done);
     const plan = listPlan(rows, this.page ?? 0, PAGE);
     const head = h_flex().gap(6).items_center().px(2)
       .child(div().text_size(13).font_semibold().child(rows.length ? `待你批准 ${rows.length} 条` : "待你批准"))

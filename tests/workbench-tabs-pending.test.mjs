@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   splitRow, parseLedger, rowKey, countRows, ageText, classifyTarget, chipState, PendingStore, fixturePath, listPlan,
-  nextEmptyStreak, closePlan, navPlan, ledgerSignature, pickState, closeFocusPlan, creationHint,
+  nextEmptyStreak, closePlan, navPlan, ledgerSignature, pickState, closeFocusPlan, creationHint, rowsForSpace,
 } from '../mods/workbench-tabs/pending.js';
 
 const HEAD = '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |';
@@ -481,4 +481,43 @@ test('创建提示：出现即清除，失败立刻提示，5 秒没出现算超
   assert.equal(creationHint({ appearing: false, failed: true, opening: 10_000, now: 10_100 }), 'failed');
   assert.equal(creationHint({ appearing: false, opening: 10_000, now: 14_900 }), null);
   assert.equal(creationHint({ appearing: false, opening: 10_000, now: 15_100 }), 'timeout');
+});
+
+
+test('Space 列：解析到每条上；缺列时全部按全局', () => {
+  const withSpace = parseLedger([
+    '| 要你做什么 | Space | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |',
+    '|---|---|---|---|---|---|---|',
+    `| 甲 | HerdrCLI | 待用户 | i | w | ${T} | P |`,
+    `| 乙 |  | 待用户 | i | w | ${T} | P |`,
+  ].join('\n'));
+  assert.equal(withSpace.error, null);
+  assert.deepEqual(withSpace.rows.map(r => r.space), ['HerdrCLI', '']);
+
+  const noSpace = parseLedger(led(`| 甲 | 待用户 | i | w | ${T} | P |`));
+  assert.equal(noSpace.error, null);
+  assert.equal(noSpace.rows[0].space, '', '缺 Space 列 = 全局');
+});
+
+test('rowsForSpace：全局都显示，本 Space 只显示自己的，别的 Space 不显示', () => {
+  const rows = [
+    { what: '全局', space: '' },
+    { what: 'A 的', space: 'AIAgentCLI' },
+    { what: 'B 的', space: 'AIBot' },
+    { what: '按 id', space: 'sp123' },
+  ];
+  const a = rowsForSpace(rows, { id: 'sp999', name: 'AIAgentCLI' });
+  assert.deepEqual(a.map(r => r.what), ['全局', 'A 的']);
+  const b = rowsForSpace(rows, { id: 'sp123', name: 'AIBot' });
+  assert.deepEqual(b.map(r => r.what), ['全局', 'B 的', '按 id']);
+  assert.deepEqual(rowsForSpace(rows, { id: 'x', name: '空 Space' }).map(r => r.what), ['全局']);
+  assert.deepEqual(rowsForSpace([], { name: 'A' }), []);
+  assert.deepEqual(rowsForSpace(null, { name: 'A' }), []);
+});
+
+test('本 Space 计数为 0 时 chip 隐藏（全局为 0 也一样）', () => {
+  const rows = [{ what: '别的 space', space: 'AIBot' }];
+  const mine = rowsForSpace(rows, { name: 'AIAgentCLI' });
+  assert.equal(countRows(mine), 0);
+  assert.equal(chipState({ kind: 'count', count: countRows(mine) }).kind, 'hidden');
 });
