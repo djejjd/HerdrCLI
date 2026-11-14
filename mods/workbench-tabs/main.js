@@ -1,7 +1,7 @@
 // 工作台标签栏：沿用 Herdr 原生行为与已核实菜单，统一状态图标。
 import { statusIcon } from './status.js';
 import { sidebarToggle } from './controls.js';
-import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, pickApprovalsPane, chipNode, globalCount, filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, rowActions, decisionEvent, chipLabel } from './pending.js';
+import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, pickApprovalsPane, chipNode, globalCount, filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, cleanupPlan, rowActions, decisionEvent, chipLabel } from './pending.js';
 import { View, div, svg, image } from "gpui-kit";
 import * as fsPromises from "fs/promises";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
@@ -56,6 +56,12 @@ export default class Tabs extends View {
   // 只记时间/Space/错误首行，不写账本正文；写失败也不影响界面。
   logCreateFailure(line) {
     try { fsPromises.appendFile("/tmp/approvals-create.log", `${line}\n`).catch(() => {}); } catch {}
+  }
+
+  // 清理日志：只有 Space、保留 id、关了几个、收起了几个。
+  logCleanup(spaceId, plan) {
+    const line = `${new Date().toISOString()} space=${spaceId ?? '?'} keep=${plan.keep} closed=${plan.close.length} settled=${plan.settle.length}`;
+    try { fsPromises.appendFile("/tmp/approvals-cleanup.log", `${line}\n`).catch(() => {}); } catch {}
   }
 
   close() {
@@ -127,6 +133,17 @@ export default class Tabs extends View {
         const tab = tabs.find(x => x.id === ens.tab);
         const count = countRows(rowsForSpace(state.rows ?? [], space, spaces()));
         if (settlePlan({ count, active: tab?.active === true }) === "settle") run("tab.settle", { id: ens.tab });
+      }
+      // 清理历史遗留：每个 Space 只留一个「待批」；先算全部计划，再逐个执行。
+      const plans = [];
+      for (const sp of spaces()) {
+        const plan = cleanupPlan(sp?.tabs ?? [], panes());
+        if (plan.keep && (plan.close.length || plan.settle.length)) plans.push({ sp, plan });
+      }
+      for (const { sp, plan } of plans) {
+        for (const id of plan.close) run("tab.close", { id, confirmed: true });
+        for (const id of plan.settle) run("tab.settle", { id });
+        if (plan.close.length || plan.settle.length) this.logCleanup(sp?.id, plan);
       }
       const sig = `${state.kind}:${state.count ?? 0}:${state.rows?.length ?? 0}`;
       if (sig !== this.sig) { this.sig = sig; cx.notify(); }

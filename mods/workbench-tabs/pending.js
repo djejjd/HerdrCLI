@@ -397,3 +397,19 @@ export function createFailure({ spaceId, error, now = Date.now() } = {}) {
     logLine: `${new Date(now).toISOString()} space=${spaceId ?? '?'} error=${msg}`,
   };
 }
+
+/** 遗留待批标签清理：每个 Space 只留一个；其余只关“确认是我们的”（pane.mod 匹配），
+ *  拿不到 pane 或 mod 不匹配时只 settle 不 close。keep 若是该 Space 唯一标签则 settle。 */
+export function cleanupPlan(tabs, panes) {
+  const all = Array.isArray(tabs) ? tabs : [];
+  const pending = all.filter(t => t && t.name === '待批');
+  if (!pending.length) return { keep: null, close: [], settle: [] };
+  const paneOf = id => (Array.isArray(panes) ? panes : []).find(p => p && p.tab === id);
+  const ours = t => paneOf(t.id)?.mod === 'workbench-tabs';
+  const keepTab = pending.find(t => t.active) ?? pending[0];
+  const others = pending.filter(t => t !== keepTab);
+  const close = others.filter(ours).map(t => t.id);
+  const settle = others.filter(t => !ours(t)).map(t => t.id);
+  if (all.length === 1 && !keepTab.settled) settle.push(keepTab.id);
+  return { keep: keepTab.id, close, settle };
+}

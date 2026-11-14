@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
   splitRow, parseLedger, rowKey, countRows, ageText, classifyTarget, chipState, PendingStore, fixturePath, listPlan,
   ledgerSignature, pickState, rowsForSpace, pickApprovalsPane, chipNode, globalCount,
-  filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, rowActions, decisionEvent, chipLabel,
+  filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, cleanupPlan, rowActions, decisionEvent, chipLabel,
 } from '../mods/workbench-tabs/pending.js';
 
 const HEAD = '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |';
@@ -607,4 +607,41 @@ test('两次创建都抛错：creating 复位、createError 非空、日志行�
   assert.match(log, /space=sp1/);
   assert.match(log, /no space yet/);
   assert.equal(log.includes('决定是否合并'), false, '日志不记账本正文');
+});
+
+
+const TT = (id, extra = {}) => ({ id, name: '待批', ...extra });
+const PP = (tab, mod = 'workbench-tabs') => ({ pane: `p-${tab}`, tab, mod });
+
+test('cleanupPlan：0/1/2/4 个、active 优先、唯一标签只 settle', () => {
+  // 0 个
+  assert.deepEqual(cleanupPlan([{ id: 'a', name: '1' }], []), { keep: null, close: [], settle: [] });
+  // 1 个且有别的标签
+  assert.deepEqual(cleanupPlan([TT('a'), { id: 'b', name: '2' }], [PP('a')]), { keep: 'a', close: [], settle: [] });
+  // 1 个且是唯一标签 -> settle
+  assert.deepEqual(cleanupPlan([TT('a')], [PP('a')]), { keep: 'a', close: [], settle: ['a'] });
+  // 2 个无 active -> 最早 keep，另一个 close
+  assert.deepEqual(cleanupPlan([TT('a', { settled: true }), TT('b'), { id: 'z', name: '1' }], [PP('a'), PP('b')]),
+    { keep: 'a', close: ['b'], settle: [] });
+  // 2 个且 b active -> keep b
+  assert.deepEqual(cleanupPlan([TT('a'), TT('b', { active: true }), { id: 'z', name: '1' }], [PP('a'), PP('b')]),
+    { keep: 'b', close: ['a'], settle: [] });
+  // 4 个，1 settled + 3 unsettled，有普通标签
+  assert.deepEqual(cleanupPlan([TT('a', { settled: true }), TT('b'), TT('c'), TT('d'), { id: 'e', name: 'x' }],
+    [PP('a'), PP('b'), PP('c'), PP('d')]),
+    { keep: 'a', close: ['b', 'c', 'd'], settle: [] });
+  // 4 个且 c active
+  assert.deepEqual(cleanupPlan([TT('a', { settled: true }), TT('b'), TT('c', { active: true }), TT('d'), { id: 'e', name: 'x' }],
+    [PP('a'), PP('b'), PP('c'), PP('d')]),
+    { keep: 'c', close: ['a', 'b', 'd'], settle: [] });
+});
+
+test('cleanupPlan：名字像但 pane 不是我们的 mod -> 不 close，只 settle', () => {
+  // 用户自建同名终端标签
+  assert.deepEqual(cleanupPlan([TT('a'), { id: 'u', name: '待批' }], [PP('a'), { pane: 'p-u', tab: 'u', mod: 'shell' }]),
+    { keep: 'a', close: [], settle: ['u'] });
+  // pane 信息缺失 -> 不 close
+  assert.deepEqual(cleanupPlan([TT('a'), TT('b')], [PP('a')]), { keep: 'a', close: [], settle: ['b'] });
+  // 幂等：只剩 keep 且有别的标签 -> 无动作
+  assert.deepEqual(cleanupPlan([TT('a'), { id: 'e', name: 'x' }], [PP('a')]), { keep: 'a', close: [], settle: [] });
 });
