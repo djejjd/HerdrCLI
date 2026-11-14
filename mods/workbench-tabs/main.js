@@ -1,7 +1,7 @@
 // 工作台标签栏：沿用 Herdr 原生行为与已核实菜单，统一状态图标。
 import { statusIcon } from './status.js';
 import { sidebarToggle } from './controls.js';
-import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, pickApprovalsPane, chipNode, globalCount, filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, cleanupPlan, cleanupLogLine, rowActions, decisionEvent, chipLabel } from './pending.js';
+import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, pickApprovalsPane, chipNode, globalCount, filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, cleanupPlan, cleanupLogLine, retryPlan, cleanupFailureLine, rowActions, decisionEvent, chipLabel } from './pending.js';
 import { View, div, svg, image } from "gpui-kit";
 import * as fsPromises from "fs/promises";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
@@ -40,6 +40,8 @@ export default class Tabs extends View {
     this.decisionError = null;
     this.creating = false;
     this.createError = null;
+    this.cleanupError = null;
+    this.closeTries = new Map();
     if (_props?.approvals) {
       this.page = 0;
       this.store.refresh().then(() => { if (!this.store.closed) cx.notify(); }).catch(() => {});
@@ -58,7 +60,29 @@ export default class Tabs extends View {
     try { fsPromises.appendFile(`${appHome()}/approvals-create.log`, `${line}\n`).catch(() => {}); } catch {}
   }
 
-  // 清理日志：只有 Space、保留 id、关了几个、收起了几个。
+  // 执行单个清理动作：失败写日志 + tooltip 可见；同一 id 最多 2 次、间隔 30 秒。
+  runCleanup(action, id, fn) {
+    const now = Date.now();
+    const st = this.closeTries.get(id) ?? { n: 0, at: 0 };
+    const decision = retryPlan({ tries: st.n, lastAt: st.at, now });
+    if (decision === "wait") return;
+    if (decision === "giveup") {
+      this.logCleanup(`gave-up action=${action} id=${id} tries=${st.n}`);
+      this.cleanupError = `清理失败：${id}`;
+      return;
+    }
+    try {
+      fn();
+      this.closeTries.delete(id);
+      this.cleanupError = null;
+    } catch (error) {
+      this.closeTries.set(id, { n: st.n + 1, at: now });
+      this.cleanupError = `清理失败：${id}`;
+      this.logCleanup(cleanupFailureLine({ action, id, error, now }));
+    }
+  }
+
+  // 清理日志：只有 Space、待批 id、keep、动作。
   logCleanup(spaceId, plan) {
     const line = cleanupLogLine({ spaceId, plan });
     try { fsPromises.appendFile(`${appHome()}/approvals-cleanup.log`, `${line}\n`).catch(() => {}); } catch {}
@@ -134,16 +158,21 @@ export default class Tabs extends View {
         const count = countRows(rowsForSpace(state.rows ?? [], space, spaces()));
         if (settlePlan({ count, active: tab?.active === true }) === "settle") run("tab.settle", { id: ens.tab });
       }
-      // 清理历史遗留：每个 Space 只留一个「待批」；先算全部计划，再逐个执行。
+      // 清理历史遗留：每个 Space 只留最早出现的待批标签；关 active 重复项前先切到 keep。
       const plans = [];
       for (const sp of spaces()) {
-        const plan = cleanupPlan(sp?.tabs ?? [], panes());
-        if (plan.keep && (plan.close.length || plan.settle.length)) plans.push({ sp, plan });
+        const tabs = sp?.tabs ?? [];
+        const plan = cleanupPlan(tabs, panes());
+        if (!plan.keep) continue;
+        const pendingIds = tabs.filter(t => t.name === "待批").map(t => t.id);
+        if (plan.select.length || plan.close.length || plan.settle.length) plans.push({ sp, plan, pendingIds });
       }
-      for (const { sp, plan } of plans) {
-        for (const id of plan.close) run("tab.close", { id, confirmed: true });
-        for (const id of plan.settle) run("tab.settle", { id });
-        if (plan.close.length || plan.settle.length) this.logCleanup(sp?.id, plan);
+      for (const { sp, plan, pendingIds } of plans) {
+        this.logCleanup(`start space=${sp?.id} pending=${pendingIds.join(",") || "-"} keep=${plan.keep} close=${plan.close.join(",") || "-"} settle=${plan.settle.join(",") || "-"}`);
+        for (const id of plan.select) this.runCleanup("select", id, () => run("tab.select", { id }));
+        for (const id of plan.close) this.runCleanup("close", id, () => run("tab.close", { id, confirmed: true }));
+        for (const id of plan.settle) this.runCleanup("settle", id, () => run("tab.settle", { id }));
+        this.logCleanup(`done space=${sp?.id} keep=${plan.keep} closed=${plan.close.length} settled=${plan.settle.length}`);
       }
       const sig = `${state.kind}:${state.count ?? 0}:${state.rows?.length ?? 0}`;
       if (sig !== this.sig) { this.sig = sig; cx.notify(); }
@@ -200,6 +229,7 @@ export default class Tabs extends View {
 
   hint(s) {
     if (this.createError) return this.createError;
+    if (this.cleanupError) return this.cleanupError;
     const where = this.ledgerPath();
     if (s.kind === "missing") return `账本缺失：${where}`;
     if (s.kind === "error") return `账本无法解析（${REASONS[s.reason] ?? s.reason}）：${where}`;

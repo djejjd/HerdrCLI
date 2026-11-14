@@ -403,20 +403,36 @@ export function createFailure({ spaceId, error, now = Date.now() } = {}) {
 export function cleanupPlan(tabs, panes) {
   const all = Array.isArray(tabs) ? tabs : [];
   const pending = all.filter(t => t && t.name === '待批');
-  if (!pending.length) return { keep: null, close: [], settle: [] };
+  if (!pending.length) return { keep: null, close: [], settle: [], select: [] };
   const paneOf = id => (Array.isArray(panes) ? panes : []).find(p => p && p.tab === id);
   const ours = t => paneOf(t.id)?.mod === 'workbench-tabs';
-  // active 一律保留；关闭只发生在“有 keep 保底、且非 active”的重复项上。
-  const keepTab = pending.find(t => t.active) ?? pending[0];
+  // keep 永远取最早出现的待批标签，id 稳定，不随 active 变化。
+  const keepTab = pending[0];
   const others = pending.filter(t => t !== keepTab);
   const close = others.filter(ours).map(t => t.id);
   const settle = others.filter(t => !ours(t)).map(t => t.id);
+  // active 的重复项要被关：先切到 keep，再关它，避免用户留在被关标签上。
+  const activeDup = others.some(t => t.active && ours(t));
+  const select = activeDup ? [keepTab.id] : [];
   if (all.length === 1 && !keepTab.settled) settle.push(keepTab.id);
-  return { keep: keepTab.id, close, settle };
+  return { keep: keepTab.id, close, settle, select };
 }
 
 /** 清理日志一行：保留 id、被关的 id 列表、被收起的数量。 */
 export function cleanupLogLine({ spaceId, plan, now = Date.now() } = {}) {
   const closed = (plan?.close ?? []).join(',');
   return `${new Date(now).toISOString()} space=${spaceId ?? '?'} keep=${plan?.keep ?? '-'} closed=${closed || '-'} settled=${(plan?.settle ?? []).length}`;
+}
+
+/** 有界重试：同一 id 最多 2 次，间隔 ≥30 秒；用完返回 giveup。 */
+export function retryPlan({ tries = 0, lastAt = 0, now = Date.now(), max = 2, gap = 30000 } = {}) {
+  if (Number(tries) >= max) return 'giveup';
+  if (Number(tries) > 0 && now - Number(lastAt) < gap) return 'wait';
+  return 'run';
+}
+
+/** 清理失败日志行：action/id/错误首行，不含账本正文。 */
+export function cleanupFailureLine({ action, id, error, now = Date.now() } = {}) {
+  const msg = String(error?.message ?? error ?? 'unknown').split('\n')[0].slice(0, 100);
+  return `${new Date(now).toISOString()} action=${action ?? '?'} id=${id ?? '?'} error=${msg}`;
 }

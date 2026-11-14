@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
   splitRow, parseLedger, rowKey, countRows, ageText, classifyTarget, chipState, PendingStore, fixturePath, listPlan,
   ledgerSignature, pickState, rowsForSpace, pickApprovalsPane, chipNode, globalCount,
-  filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, cleanupPlan, cleanupLogLine, rowActions, decisionEvent, chipLabel,
+  filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, cleanupPlan, cleanupLogLine, retryPlan, cleanupFailureLine, rowActions, decisionEvent, chipLabel,
 } from '../mods/workbench-tabs/pending.js';
 
 const HEAD = '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |';
@@ -615,35 +615,35 @@ const PP = (tab, mod = 'workbench-tabs') => ({ pane: `p-${tab}`, tab, mod });
 
 test('cleanupPlan：0/1/2/4 个、active 优先、唯一标签只 settle', () => {
   // 0 个
-  assert.deepEqual(cleanupPlan([{ id: 'a', name: '1' }], []), { keep: null, close: [], settle: [] });
+  assert.deepEqual(cleanupPlan([{ id: 'a', name: '1' }], []), { keep: null, close: [], settle: [], select: [] });
   // 1 个且有别的标签
-  assert.deepEqual(cleanupPlan([TT('a'), { id: 'b', name: '2' }], [PP('a')]), { keep: 'a', close: [], settle: [] });
+  assert.deepEqual(cleanupPlan([TT('a'), { id: 'b', name: '2' }], [PP('a')]), { keep: 'a', close: [], settle: [], select: [] });
   // 1 个且是唯一标签 -> settle
-  assert.deepEqual(cleanupPlan([TT('a')], [PP('a')]), { keep: 'a', close: [], settle: ['a'] });
-  // 2 个无 active -> 最早 keep，另一个 close
+  assert.deepEqual(cleanupPlan([TT('a')], [PP('a')]), { keep: 'a', close: [], settle: ['a'], select: [] });
+  // 2 个：keep 永远是最早的 a
   assert.deepEqual(cleanupPlan([TT('a', { settled: true }), TT('b'), { id: 'z', name: '1' }], [PP('a'), PP('b')]),
-    { keep: 'a', close: ['b'], settle: [] });
-  // 2 个且 b active -> keep b
+    { keep: 'a', close: ['b'], settle: [], select: [] });
+  // b active 且是重复项：keep 仍是 a，先 select a 再关 b
   assert.deepEqual(cleanupPlan([TT('a'), TT('b', { active: true }), { id: 'z', name: '1' }], [PP('a'), PP('b')]),
-    { keep: 'b', close: ['a'], settle: [] });
-  // 4 个，1 settled + 3 unsettled，有普通标签
+    { keep: 'a', close: ['b'], settle: [], select: ['a'] });
+  // 4 个：keep 最早 a，其余 close
   assert.deepEqual(cleanupPlan([TT('a', { settled: true }), TT('b'), TT('c'), TT('d'), { id: 'e', name: 'x' }],
     [PP('a'), PP('b'), PP('c'), PP('d')]),
-    { keep: 'a', close: ['b', 'c', 'd'], settle: [] });
-  // 4 个且 c active
+    { keep: 'a', close: ['b', 'c', 'd'], settle: [], select: [] });
+  // 4 个且 c active：keep 仍是 a，select a 再关 c
   assert.deepEqual(cleanupPlan([TT('a', { settled: true }), TT('b'), TT('c', { active: true }), TT('d'), { id: 'e', name: 'x' }],
     [PP('a'), PP('b'), PP('c'), PP('d')]),
-    { keep: 'c', close: ['a', 'b', 'd'], settle: [] });
+    { keep: 'a', close: ['b', 'c', 'd'], settle: [], select: ['a'] });
 });
 
 test('cleanupPlan：名字像但 pane 不是我们的 mod -> 不 close，只 settle', () => {
   // 用户自建同名终端标签
   assert.deepEqual(cleanupPlan([TT('a'), { id: 'u', name: '待批' }], [PP('a'), { pane: 'p-u', tab: 'u', mod: 'shell' }]),
-    { keep: 'a', close: [], settle: ['u'] });
+    { keep: 'a', close: [], settle: ['u'], select: [] });
   // pane 信息缺失 -> 不 close
-  assert.deepEqual(cleanupPlan([TT('a'), TT('b')], [PP('a')]), { keep: 'a', close: [], settle: ['b'] });
+  assert.deepEqual(cleanupPlan([TT('a'), TT('b')], [PP('a')]), { keep: 'a', close: [], settle: ['b'], select: [] });
   // 幂等：只剩 keep 且有别的标签 -> 无动作
-  assert.deepEqual(cleanupPlan([TT('a'), { id: 'e', name: 'x' }], [PP('a')]), { keep: 'a', close: [], settle: [] });
+  assert.deepEqual(cleanupPlan([TT('a'), { id: 'e', name: 'x' }], [PP('a')]), { keep: 'a', close: [], settle: [], select: [] });
 });
 
 
@@ -661,4 +661,30 @@ test('静态：诊断日志写在 appHome 下，不落到 /tmp', () => {
   assert.match(main, /appHome\(\)\}\/approvals-cleanup\.log/);
   assert.match(main, /appHome\(\)\}\/approvals-create\.log/);
   assert.equal(/\/tmp\/approvals-/.test(main), false);
+});
+
+
+test('连续 3 轮 cleanup：keep 始终是最早 id，不抖动', () => {
+  const tabs = [TT('a'), TT('b', { active: true }), { id: 'z', name: '1' }];
+  const panes = [PP('a'), PP('b')];
+  for (let i = 0; i < 3; i += 1) {
+    const plan = cleanupPlan(tabs, panes);
+    assert.equal(plan.keep, 'a');
+    assert.deepEqual(plan.close, ['b']);
+  }
+});
+
+test('有界重试：两次后 giveup，间隔不足则 wait', () => {
+  assert.equal(retryPlan({ tries: 0 }), 'run');
+  assert.equal(retryPlan({ tries: 1, lastAt: 1000, now: 5000 }), 'wait');
+  assert.equal(retryPlan({ tries: 1, lastAt: 1000, now: 40000 }), 'run');
+  assert.equal(retryPlan({ tries: 2, lastAt: 1000, now: 999999 }), 'giveup');
+});
+
+test('失败日志行：含 action/id/错误首行，不含正文', () => {
+  const line = cleanupFailureLine({ action: 'close', id: 'tb1', error: new Error('no tab "tb1"\nmore'), now: 1700000000000 });
+  assert.match(line, /action=close/);
+  assert.match(line, /id=tb1/);
+  assert.match(line, /no tab/);
+  assert.equal(line.includes('决定是否合并'), false);
 });
