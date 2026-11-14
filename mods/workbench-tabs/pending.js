@@ -120,7 +120,7 @@ export function listPlan(rows, page = 0, pageSize = 6) {
 
 /** chip 的显示状态：0 行隐藏；账本缺失与读取/解析失败都要露出“待批 ?”，不静默。 */
 export function chipState(state) {
-  if (!state || state.kind === 'hidden') return { kind: 'hidden' };
+  if (!state || state.kind === 'hidden' || state.kind === 'empty') return { kind: 'hidden' };
   if (state.kind === 'missing') return { kind: 'missing' };
   if (state.kind === 'error') return { kind: 'error', reason: state.reason ?? '' };
   const count = Number(state.count) || 0;
@@ -186,7 +186,8 @@ export class PendingStore {
         else {
           const rows = parsed.rows;
           const count = countRows(rows);
-          next = count > 0 ? { kind: 'count', count, rows } : { kind: 'hidden' };
+          // 空态与“没读到”必须分开：只有 empty 允许自动关闭标签。
+          next = count > 0 ? { kind: 'count', count, rows } : { kind: 'empty', rows };
         }
       }
       this.state = next;
@@ -218,4 +219,26 @@ export function fixturePath(raw, now = Date.now()) {
   const p = v.path;
   if (!p.startsWith('/tmp/') && !p.startsWith('/private/tmp/')) return null;
   return p;
+}
+
+/** 连续空态计数：只有成功解析出的 empty 才累加，其它状态一律清零。 */
+export function nextEmptyStreak(prev, kind) {
+  return kind === 'empty' ? (Number(prev) || 0) + 1 : 0;
+}
+
+/** 待批标签的自动关闭判定。
+ *  close：非当前、同空间标签数 >1、连续两次成功读到空态；
+ *  banner：空态但不能自动关（当前标签 / 仅剩一个标签），交给用户切走或手关；
+ *  keep：未处理、缺失、读取失败都不动。 */
+export function closePlan({ kind, active, tabCount, emptyStreak }) {
+  if (kind !== 'empty') return 'keep';
+  if (Number(emptyStreak) < 2) return 'keep';
+  if (Number(tabCount) <= 1) return 'banner';
+  return active ? 'banner' : 'close';
+}
+
+/** chip 点击的去向：已有待批面板就复用（返回其 pane/tab），否则新建标签。 */
+export function approvalsNav(panesList) {
+  const hit = (Array.isArray(panesList) ? panesList : []).find(p => p && p.mod === 'workbench-tabs');
+  return hit ? { kind: 'open', pane: hit.pane, tab: hit.tab } : { kind: 'create' };
 }

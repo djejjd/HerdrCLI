@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   splitRow, parseLedger, rowKey, countRows, ageText, classifyTarget, chipState, PendingStore, fixturePath, listPlan,
+  nextEmptyStreak, closePlan, approvalsNav,
 } from '../mods/workbench-tabs/pending.js';
 
 const HEAD = '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |';
@@ -132,19 +133,22 @@ test('chip 三态：隐藏 / 计数 / 错误 / 缺失', () => {
   assert.deepEqual(chipState({ kind: 'hidden' }), { kind: 'hidden' });
   assert.deepEqual(chipState({ kind: 'count', count: 2 }), { kind: 'count', count: 2 });
   assert.equal(chipState({ kind: 'count', count: 0 }).kind, 'hidden');
+  assert.equal(chipState({ kind: 'empty' }).kind, 'hidden');
   assert.equal(chipState({ kind: 'error', reason: 'no-header' }).kind, 'error');
   assert.equal(chipState({ kind: 'missing' }).kind, 'missing');
   assert.equal(chipState(undefined).kind, 'hidden');
 });
 
-test('账本缺失是错误态而不是静默隐藏，0 行才隐藏', async () => {
+test('账本缺失是缺失态而不是静默隐藏，0 行是空态（chip 隐藏）', async () => {
   const missing = new PendingStore({ read: async () => null });
   const state = await missing.refresh();
   assert.equal(state.kind, 'missing');
   assert.equal(chipState(state).kind, 'missing');
 
   const empty = new PendingStore({ read: async () => led() });
-  assert.equal((await empty.refresh()).kind, 'hidden');
+  const emptyState = await empty.refresh();
+  assert.equal(emptyState.kind, 'empty');
+  assert.equal(chipState(emptyState).kind, 'hidden');
 });
 
 test('异步读取：异常报错、失败信息不外泄', async () => {
@@ -190,7 +194,7 @@ test('解析失败后恢复为计数，状态可回落', async () => {
   text = led(`| 甲 | 待用户 | i | w | ${T} | P |`);
   assert.equal((await store.refresh()).kind, 'count');
   text = led();
-  assert.equal((await store.refresh()).kind, 'hidden');
+  assert.equal((await store.refresh()).kind, 'empty');
 });
 
 
@@ -259,4 +263,65 @@ test('分页：已完成行不进入列表，页数按未处理行算', () => {
   assert.equal(plan.shown.length, 6);
   assert.equal(plan.pages, 1);
   assert.equal(plan.more, 0);
+});
+
+
+test('空态计数：连续两次成功读到 EMPTY 才累积，其它状态清零', () => {
+  assert.equal(nextEmptyStreak(0, 'empty'), 1);
+  assert.equal(nextEmptyStreak(1, 'empty'), 2);
+  assert.equal(nextEmptyStreak(2, 'empty'), 3);
+  assert.equal(nextEmptyStreak(1, 'count'), 0);
+  assert.equal(nextEmptyStreak(2, 'missing'), 0, '读取失败/缺失不算空态');
+  assert.equal(nextEmptyStreak(2, 'error'), 0);
+  assert.equal(nextEmptyStreak(0, 'count'), 0);
+});
+
+test('自动关闭判定：只有非当前、标签数>1、连续两次空态才关', () => {
+  const base = { kind: 'empty', active: false, tabCount: 2, emptyStreak: 2 };
+  assert.equal(closePlan(base), 'close');
+  assert.equal(closePlan({ ...base, emptyStreak: 1 }), 'keep', '第一次空态不动');
+  assert.equal(closePlan({ ...base, active: true }), 'banner', '当前标签只提示');
+  assert.equal(closePlan({ ...base, tabCount: 1 }), 'banner', '仅剩一个标签不关');
+  assert.equal(closePlan({ ...base, kind: 'count' }), 'keep');
+  assert.equal(closePlan({ ...base, kind: 'missing' }), 'keep', '缺失不算空');
+  assert.equal(closePlan({ ...base, kind: 'error' }), 'keep', '解析失败不算空');
+});
+
+test('查重导航：有待批面板就复用，没有才新建', () => {
+  assert.deepEqual(approvalsNav([]), { kind: 'create' });
+  assert.deepEqual(approvalsNav(null), { kind: 'create' });
+  assert.deepEqual(approvalsNav([{ pane: 'p1', tab: 'tb1', mod: 'workbench-tabs' }]),
+    { kind: 'open', pane: 'p1', tab: 'tb1' });
+  assert.deepEqual(approvalsNav([
+    { pane: 'p1', tab: 'tb1', mod: 'agent-workbench' },
+    { pane: 'p2', tab: 'tb2', mod: 'workbench-tabs' },
+    { pane: 'p3', tab: 'tb3', mod: 'workbench-tabs' },
+  ]), { kind: 'open', pane: 'p2', tab: 'tb2' }, '多个时取第一个');
+});
+
+test('失败分支：读取抛错后状态为 error，空态 streak 清零且不触发关闭', async () => {
+  let call = 0;
+  const store = new PendingStore({ read: async () => {
+    call += 1;
+    if (call === 1) return led();
+    throw new Error('boom');
+  } });
+  let streak = 0;
+  streak = nextEmptyStreak(streak, (await store.refresh()).kind);
+  assert.equal(streak, 1);
+  const failed = await store.refresh();
+  assert.equal(failed.kind, 'error');
+  streak = nextEmptyStreak(streak, failed.kind);
+  assert.equal(streak, 0);
+  assert.equal(closePlan({ kind: failed.kind, active: false, tabCount: 3, emptyStreak: streak }), 'keep');
+});
+
+
+test('手动关闭后仍有 COUNT：chip 可见，再点走重建', () => {
+  // 有待批时 chip 不隐藏
+  assert.equal(chipState({ kind: 'count', count: 3 }).kind, 'count');
+  // 用户手动关掉标签后，panes() 里不再有待批面板 -> 再点是新建
+  assert.deepEqual(approvalsNav([]), { kind: 'create' });
+  // 未关闭时再点是复用，不重复建
+  assert.equal(approvalsNav([{ pane: 'p1', tab: 'tb1', mod: 'workbench-tabs' }]).kind, 'open');
 });

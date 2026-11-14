@@ -1,10 +1,10 @@
 // 工作台标签栏：沿用 Herdr 原生行为与已核实菜单，统一状态图标。
 import { statusIcon } from './status.js';
 import { sidebarToggle } from './controls.js';
-import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan } from './pending.js';
+import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, nextEmptyStreak, closePlan, approvalsNav } from './pending.js';
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
-import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings, props, home, exec, readTextFile } from "herdr";
+import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, props, home, exec, readTextFile } from "herdr";
 
 const PAGE = 6;
 const REASONS = { "no-header": "没有表格表头", "no-what": "缺「要你做什么」列", "no-status": "缺「状态」列", unreadable: "内容不是文本" };
@@ -35,9 +35,16 @@ export default class Tabs extends View {
     this.sig = "";
     this.lastPoll = 0;
     this.store = new PendingStore({ read: async () => readTextFile(this.ledgerPath()) });
-    if (_props?.approvals) this.page = 0;
-    // 列表弹层只读一次，不另起轮询；常驻 chip 才需要定时刷新。
-    if (!_props?.approvals) this.timer = cx.timer.every(5000, c => this.pollApprovals(c));
+    this.emptyStreak = 0;
+    this.closedTab = null;
+    this.published = "";
+    if (_props?.approvals) {
+      // 待批标签：读一次拿首屏，之后靠 shared 更新，不自己轮询、也不触发关闭。
+      this.page = 0;
+      this.store.refresh().then((state) => { if (!this.store.closed) { this.emptyStreak = nextEmptyStreak(0, state.kind); cx.notify(); } }).catch(() => {});
+      return;
+    }
+    this.timer = cx.timer.every(5000, c => this.pollApprovals(c));
     this.pollApprovals(cx);
   }
 
@@ -65,9 +72,50 @@ export default class Tabs extends View {
       if (this.store.closed) return;
       const state = this.store.state;
       this.pruneAcks(state.rows ?? []);
+      this.emptyStreak = nextEmptyStreak(this.emptyStreak, state.kind);
+      if (state.kind !== "empty") this.closedTab = null;
+      this.publishApprovals(state);
+      this.maybeCloseApprovals(state);
       const sig = `${state.kind}:${state.count ?? 0}:${state.reason ?? ""}:${state.rows?.length ?? 0}`;
       if (sig !== this.sig) { this.sig = sig; cx.notify(); }
     }).catch(() => {});
+  }
+
+  // 把状态发布给所有 mod（待批标签据此更新）；只在内容变化时发，避免 shared 重绘循环。
+  publishApprovals(state) {
+    const key = `${state.kind}:${state.count ?? 0}:${state.reason ?? ""}:${state.rows?.length ?? 0}`;
+    if (key === this.published) return;
+    this.published = key;
+    setShared("approvals.state", {
+      kind: state.kind,
+      count: state.count ?? 0,
+      reason: state.reason ?? null,
+      rows: (state.rows ?? []).map(r => ({ what: r.what, impact: r.impact, where: r.where, proposedAt: r.proposedAt, project: r.project, done: r.done })),
+      at: this.store?.at ?? null,
+    });
+  }
+
+  // 自动关闭：只由轮询调用（不在 render 里），且只在非当前、同空间标签数 >1、连续两次空态时关。
+  maybeCloseApprovals(state) {
+    if (props()?.approvals) return;
+    const pane = panes().find(p => p && p.mod === "workbench-tabs");
+    if (!pane) return;
+    const space = spaces().find(s => s.id === pane.space);
+    const tabs = space?.tabs ?? [];
+    const active = tabs.find(t => t.active)?.id === pane.tab;
+    const plan = closePlan({ kind: state.kind, active, tabCount: tabs.length, emptyStreak: this.emptyStreak });
+    if (plan !== "close" || this.closedTab === pane.tab) return;
+    this.closedTab = pane.tab;
+    run("tab.close", { id: pane.tab, confirmed: true });
+  }
+
+  // 待批标签读 shared 的状态；没有时退回自己那一次读取。
+  panelState() {
+    const sharedState = shared("approvals.state");
+    if (sharedState && typeof sharedState === "object") return sharedState;
+    const own = this.store?.state;
+    if (!own || own.kind === "hidden") return null;
+    return { kind: own.kind, count: own.count ?? 0, reason: own.reason ?? null, rows: own.rows ?? [], at: this.store?.at ?? null };
   }
 
   // 已读只保留当前还存在的行，账本删行后 ack 自动回收（上限 200）。
@@ -110,7 +158,10 @@ export default class Tabs extends View {
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click((_e, cx) => {
         cx.stop_propagation();
-        openOverlay({ mod: "workbench-tabs", kind: "popup", width: 380, props: { approvals: true } });
+        // 已有待批标签就切过去；没有才新建。重复点击不会重复建。
+        const nav = approvalsNav(panes());
+        if (nav.kind === "open") { run("tab.select", { id: nav.tab }); run("pane.focus", { pane: nav.pane }); }
+        else run("tab.new", { name: "待批", mod: "workbench-tabs", props: { approvals: true } });
       })
       .child(statusIcon(bad ? "idle" : "blocked", t))
       .child(div().text_size(12).font_medium().child(bad ? "待批 ?" : `待批 ${s.count}`));
@@ -172,10 +223,29 @@ export default class Tabs extends View {
   }
 
   approvalsPanel(t) {
-    const state = this.store?.state ?? { kind: "hidden" };
+    const state = this.panelState();
+    const path = this.ledgerPath();
+    if (!state) {
+      return v_flex().w_full().p(10).gap(6)
+        .child(div().text_size(12).text_color(t.muted).child("读取中…"))
+        .child(div().text_size(10.5).text_color(t.dim).truncate().child(path));
+    }
+    // 全部处理完：不再列条目，只给“已全部处理”与去留说明；自动关闭由轮询按规则做。
+    if (state.kind === "empty") {
+      const pane = panes().find(p => p && p.mod === "workbench-tabs");
+      const space = spaces().find(s => s.id === pane?.space);
+      const tabs = space?.tabs ?? [];
+      const hint = tabs.length <= 1 ? "本空间仅此标签，可手动关闭" : "切到其他标签后会自动关闭";
+      return v_flex().w_full().p(10).gap(6)
+        .child(h_flex().gap(6).items_center().px(2)
+          .child(div().text_size(13).font_semibold().child("已全部处理"))
+          .child(div().flex_1())
+          .child(div().text_size(11).text_color(t.dim).child("只读")))
+        .child(div().p(10).text_size(12).text_color(t.muted).child(hint))
+        .child(div().text_size(10.5).text_color(t.dim).px(2).truncate().tooltip(path).child(path));
+    }
     // 已完成是终态：不进入列表，也不参与页数。
     const rows = (state.rows ?? []).filter(r => !r.done);
-    const path = this.ledgerPath();
     const plan = listPlan(rows, this.page ?? 0, PAGE);
     const head = h_flex().gap(6).items_center().px(2)
       .child(div().text_size(13).font_semibold().child(rows.length ? `待你批准 ${rows.length} 条` : "待你批准"))
