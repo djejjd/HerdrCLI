@@ -586,7 +586,7 @@ export default class Workbench extends View {
       .on_click(()=>{const req={space:space.id,at:Date.now(),nonce:`${space.id}-${Date.now()}`};setShared('approvals.openRequest',req);setShared('approvals.lastOpen',{...req,stage:'click',result:null});})
       .child(svg('mods/agent-workbench/attention.svg').size(13).text_color(t.muted))
       .child(div().text_size(12.5).text_color(t.muted).child('待批')));
-    const total=before+1;
+    const total=before+(APPROVALS_ENTRY?1:0);
     const terms=spaceTerminals(all,list,panes(),space.id);
     const foldedTerm=this.termFolded.has(space.id);
     const win=terminalSectionRows(terms,{folded:foldedTerm,expanded:this.termExpanded.has(space.id)});
