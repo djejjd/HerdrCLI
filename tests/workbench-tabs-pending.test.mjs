@@ -654,3 +654,11 @@ test('清理日志行：含 keep、closed id 列表、settled 数', () => {
   assert.match(line, /closed=a,b/);
   assert.match(line, /settled=1/);
 });
+
+
+test('静态：诊断日志写在 appHome 下，不落到 /tmp', () => {
+  const main = readFileSync(new URL('../mods/workbench-tabs/main.js', import.meta.url), 'utf8');
+  assert.match(main, /appHome\(\)\}\/approvals-cleanup\.log/);
+  assert.match(main, /appHome\(\)\}\/approvals-create\.log/);
+  assert.equal(/\/tmp\/approvals-/.test(main), false);
+});
