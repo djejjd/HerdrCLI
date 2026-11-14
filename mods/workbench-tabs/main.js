@@ -109,27 +109,60 @@ export default class Tabs extends View {
   consumeRequest(cx) {
     const req = requestPlan({ request: shared("approvals.openRequest") });
     if (!req) return;
-    setShared("approvals.openRequest", null);
+    const note = (stage, result) => setShared("approvals.lastOpen", { space: req.space, at: req.at, nonce: req.nonce, stage, result });
+    note("consuming", null);
     const sp = spaces().find(s => s.id === req.space);
-    if (!sp) return;
+    if (!sp) { note("consuming", "no-space"); return; }
     const markers = JSON.parse(localStorage.getItem("approvals.closed") ?? "{}");
     delete markers[req.space];
     localStorage.setItem("approvals.closed", JSON.stringify(markers));
     const ours = (sp.tabs ?? []).find(t => t.name === "待批" && panes().find(p => p && p.tab === t.id)?.mod === "workbench-tabs");
     if (ours) {
-      if (ours.settled) run("tab.unsettle", { id: ours.id });
-      run("tab.select", { id: ours.id });
+      try {
+        if (ours.settled) run("tab.unsettle", { id: ours.id });
+        run("tab.select", { id: ours.id });
+        setShared("approvals.openRequest", null);
+        note("done", "ok-existing");
+      } catch (error) {
+        this.cleanupError = `打开失败：${String(error?.message ?? error).slice(0, 60)}`;
+        note("done", "error-existing");
+      }
       return;
     }
-    try { run("tab.new", createArgs2({ space: req.space })); } catch { return; }
+    try {
+      run("tab.new", createArgs2({ space: req.space }));
+    } catch (error) {
+      const msg = String(error?.message ?? error).split("\n")[0].slice(0, 80);
+      this.cleanupError = `打开失败：${msg}`;
+      this.logCleanup(`open-failed space=${req.space} error=${msg}`);
+      setShared("approvals.openRequest", null);
+      note("done", `error-create:${msg}`);
+      cx.notify();
+      return;
+    }
+    note("created", "pending-verify");
     cx.timer.after(400, () => {
       const tabs = spaces().find(s => s.id === req.space)?.tabs ?? [];
       const tab = tabs.find(t => t.name === "待批");
-      if (!tab) return;
+      if (!tab) {
+        this.cleanupError = "打开失败：标签未出现";
+        setShared("approvals.openRequest", null);
+        note("done", "missing");
+        return;
+      }
       this.created[req.space] = createdRing(this.created[req.space], tab.id, 20);
       localStorage.setItem("approvals.created", JSON.stringify(this.created));
-      if (tab.settled) run("tab.unsettle", { id: tab.id });
-      run("tab.select", { id: tab.id });
+      try {
+        if (tab.settled) run("tab.unsettle", { id: tab.id });
+        run("tab.select", { id: tab.id });
+        setShared("approvals.openRequest", null);
+        note("done", "ok-created");
+      } catch (error) {
+        const msg = String(error?.message ?? error).split("\n")[0].slice(0, 80);
+        this.cleanupError = `打开失败：${msg}`;
+        setShared("approvals.openRequest", null);
+        note("done", `error-select:${msg}`);
+      }
     });
   }
 
@@ -194,7 +227,7 @@ export default class Tabs extends View {
         const count = countRows(rowsForSpace(state.rows ?? [], sp, allSpaces));
         const sig = sigFor(sp);
         const force = req && req.space === sp.id;
-        if (force) { delete markers[sp.id]; localStorage.setItem("approvals.closed", JSON.stringify(markers)); setShared("approvals.openRequest", null); }
+        if (force) { delete markers[sp.id]; localStorage.setItem("approvals.closed", JSON.stringify(markers)); }
         const mk = markerPlan({ marker: markers[sp.id], signature: sig, count, force });
         let mode = null;
         if (force) mode = "force";
@@ -234,6 +267,8 @@ export default class Tabs extends View {
             this.created[createdSpace] = createdRing(this.created[createdSpace], e.tab, 20);
             localStorage.setItem("approvals.created", JSON.stringify(this.created));
             this.logCleanup(`ensure-create space=${createdSpace} created=${e.tab} prevActive=${prevActive ?? "-"}`);
+            setShared("approvals.lastOpen", { space: createdSpace, stage: "poll-force", result: "created" });
+            if (shared("approvals.openRequest")?.space === createdSpace) setShared("approvals.openRequest", null);
             const tab = t.find(x => x.id === e.tab);
             if (!tab || tab.settled) return;
             const c = countRows(rowsForSpace(this.store.state.rows ?? [], spaces().find(x => x.id === createdSpace), spaces()));

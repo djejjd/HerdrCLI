@@ -580,7 +580,7 @@ export default class Workbench extends View {
     // 当前 Space 的「待批」入口：不新开分区，夹在 agents 与 terminals 之间。
     rows.push(h_flex().id(`pending-${space.id}`).absolute().left(26).right(2).top(before*ROW).h(ROW_H)
       .pl(6).pr(10).gap(6).items_center().cursor_pointer().rounded(6).hover(s=>s.bg(t.hover))
-      .on_click(()=>{setShared('approvals.openRequest',{space:space.id,at:Date.now(),nonce:`${space.id}-${Date.now()}`});})
+      .on_click(()=>{const req={space:space.id,at:Date.now(),nonce:`${space.id}-${Date.now()}`};setShared('approvals.openRequest',req);setShared('approvals.lastOpen',{...req,stage:'click',result:null});})
       .child(svg('mods/agent-workbench/attention.svg').size(13).text_color(t.muted))
       .child(div().text_size(12.5).text_color(t.muted).child('待批')));
     const total=before+1;

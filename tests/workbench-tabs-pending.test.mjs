@@ -832,3 +832,19 @@ test('ledgerSignature 与 spaceSignature 职责不同：done 行只影响前者'
   assert.notEqual(ledgerSignature({ kind: 'count', rows: doneRow }), ledgerSignature({ kind: 'count', rows: base }));
   assert.equal(spaceSignature({ rows: doneRow, space: { name: 'A' }, knownSpaces: known }), '');
 });
+
+
+test('静态：消费端先做后清、写 lastOpen 结果；侧栏点击也留痕', () => {
+  const main = readFileSync(new URL('../mods/workbench-tabs/main.js', import.meta.url), 'utf8');
+  const start = main.indexOf('consumeRequest(cx) {');
+  const body = main.slice(start, main.indexOf('\n  close() {', start));
+  assert.match(body, /approvals\.lastOpen/);
+  assert.match(body, /pending-verify/);
+  assert.match(body, /ok-existing/);
+  assert.match(body, /ok-created/);
+  // 消费开始时先记 note("consuming")，再做动作
+  assert.ok(body.indexOf('note("consuming"') < body.indexOf('run("tab.new"'));
+  const side = readFileSync(new URL('../mods/agent-workbench/main.js', import.meta.url), 'utf8');
+  assert.match(side, /approvals\.lastOpen/);
+  assert.match(side, /stage:'click'/);
+});
