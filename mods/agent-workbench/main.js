@@ -410,7 +410,7 @@ export default class Workbench extends View {
       const pairs=feeSegments(state).map(seg=>
         h_flex().flex_none().items_center().gap(4)
           .child(div().text_size(11.5).line_height('16px').text_color(t.muted).child(seg.label))
-          .child(div().text_size(13).font_medium().line_height('16px').text_color(seg.value?t.foreground:t.muted).child(seg.value??'–')));
+          .child(div().text_size(13).font_medium().line_height('16px').text_color(seg.value?t.foreground:t.muted).opacity(seg.value?0.60:1).child(seg.value??'–')));
       return h_flex().id('usage-totals').items_center().gap(10).flex_wrap()
         .when(tip,e=>e.tooltip(tip)).children(pairs);
     }
@@ -456,7 +456,7 @@ export default class Workbench extends View {
       ? h_flex().items_center().gap(16).flex_wrap().children(groups.map(g=>
           h_flex().flex_none().items_center().gap(4)
             .child(div().text_size(11.5).line_height('16px').text_color(t.muted).child(g.label))
-            .child(div().text_size(13).font_medium().line_height('16px').text_color(g.low?t.blocked:t.foreground).child(g.value))))
+            .child(div().text_size(13).font_medium().line_height('16px').text_color(g.low?t.blocked:t.foreground).opacity(g.low?1:0.60).child(g.value))))
       : div().text_size(12.5).text_color(t.muted).child('额度未知');
     // Codex 三行：品牌+plan / 额度组 / 重置行；1d/7d 费用只进 tooltip，不占版面高度。
     const reset=resetHint(shown);
