@@ -1,7 +1,7 @@
 // 工作台标签栏：沿用 Herdr 原生行为与已核实菜单，统一状态图标。
 import { statusIcon } from './status.js';
 import { sidebarToggle } from './controls.js';
-import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, nextEmptyStreak, closePlan, navPlan, ledgerSignature, pickState } from './pending.js';
+import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, nextEmptyStreak, closePlan, navPlan, ledgerSignature, pickState, closeFocusPlan, creationHint } from './pending.js';
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, props, home, exec, readTextFile } from "herdr";
@@ -41,6 +41,10 @@ export default class Tabs extends View {
     this.approvalsTab = null;
     this.opening = 0;
     this.createError = null;
+    this.createFailed = false;
+    this.restoreTo = null;
+    this.approvalsActive = false;
+    this.watchTimer = null;
     if (_props?.approvals) {
       // 待批标签：读一次拿首屏，之后靠 shared 更新，不自己轮询、也不触发关闭。
       this.page = 0;
@@ -56,6 +60,18 @@ export default class Tabs extends View {
     this.store?.close();
     this.timer?.cancel?.();
     this.timer = null;
+    this.stopWatch();
+  }
+
+  // 待批标签在时每 500ms 查一次：确认存在、发现关闭后把焦点还回去。
+  ensureWatch(cx) {
+    if (this.watchTimer) return;
+    this.watchTimer = cx.timer.every(500, () => this.trackApprovalsTab());
+  }
+
+  stopWatch() {
+    this.watchTimer?.cancel?.();
+    this.watchTimer = null;
   }
 
   // 账本路径：默认全局账本；fixture 覆盖仅在有效期内且指向临时目录时生效，非法/过期立刻清掉。
@@ -78,6 +94,7 @@ export default class Tabs extends View {
       this.emptyStreak = nextEmptyStreak(this.emptyStreak, state.kind);
       if (state.kind !== "empty") this.closedTab = null;
       this.trackApprovalsTab();
+      if (this.approvalsTab && !this.watchTimer) this.ensureWatch(cx);
       this.publishApprovals(state);
       this.maybeCloseApprovals(state);
       const sig = `${state.kind}:${state.count ?? 0}:${state.reason ?? ""}:${state.rows?.length ?? 0}`;
@@ -100,15 +117,41 @@ export default class Tabs extends View {
     });
   }
 
-  // 跟踪待批标签的 tab id：找到就记住；消失就清空；创建后 5 秒仍没有则提示，不重复创建。
+  // 跟踪待批标签：只认当前 space 的 tab；找到记住、消失清空并把焦点还给上个会话；
+  // 创建 5 秒仍没出现则提示，不重复建。
   trackApprovalsTab() {
-    const pane = panes().find(p => p && p.mod === "workbench-tabs");
-    if (pane) { this.approvalsTab = pane.tab; this.opening = 0; this.createError = null; return; }
-    const tabs = spaces().find(s => s.active)?.tabs ?? [];
-    if (this.approvalsTab && !tabs.some(t => t.id === this.approvalsTab)) this.approvalsTab = null;
-    if (this.opening && Date.now() - this.opening > 5000) {
+    const space = spaces().find(s => s.active);
+    const tabs = space?.tabs ?? [];
+    const ids = new Set(tabs.map(t => t.id));
+    const pane = panes().find(p => p && p.mod === "workbench-tabs" && ids.has(p.tab));
+    if (pane) {
+      this.approvalsTab = pane.tab;
       this.opening = 0;
+      this.createFailed = false;
+      this.createError = null;
+      this.approvalsActive = tabs.find(t => t.active)?.id === pane.tab;
+      return;
+    }
+    if (this.approvalsTab && !ids.has(this.approvalsTab)) {
+      const wasActive = this.approvalsActive;
+      const target = closeFocusPlan({ closing: this.approvalsTab, prev: this.restoreTo, tabs });
+      this.approvalsTab = null;
+      this.approvalsActive = false;
+      this.restoreTo = null;
+      this.stopWatch();
+      if (wasActive && target) run("tab.select", { id: target });
+      return;
+    }
+    const hint = creationHint({ appearing: false, failed: this.createFailed, opening: this.opening, now: Date.now() });
+    if (hint === "failed") {
+      this.createError = "创建待批标签失败，请重试";
+      this.createFailed = false;
+      this.opening = 0;
+      this.stopWatch();
+    } else if (hint === "timeout") {
       this.createError = "没能创建待批标签，请再点一次";
+      this.opening = 0;
+      this.stopWatch();
     }
   }
 
@@ -117,7 +160,7 @@ export default class Tabs extends View {
     if (props()?.approvals) return;
     const pane = panes().find(p => p && p.mod === "workbench-tabs");
     if (!pane) return;
-    const space = spaces().find(s => s.id === pane.space);
+    const space = spaces().find(s => (s.tabs ?? []).some(t => t.id === pane.tab));
     const tabs = space?.tabs ?? [];
     const active = tabs.find(t => t.active)?.id === pane.tab;
     const plan = closePlan({ kind: state.kind, active, tabCount: tabs.length, emptyStreak: this.emptyStreak });
@@ -179,8 +222,13 @@ export default class Tabs extends View {
         cx.stop_propagation();
         // 已有待批标签就切过去；创建后在途锁内连点只等待，避免建出两个。
         const space = spaces().find(s => s.active);
-        const plan = navPlan({ panes: panes(), tabs: space?.tabs ?? [], tracked: this.approvalsTab, opening: this.opening });
+        const tabs = space?.tabs ?? [];
+        const plan = navPlan({ panes: panes(), tabs, tracked: this.approvalsTab, opening: this.opening });
         if (plan.kind === "wait") return;
+        // 记住从哪个会话进来的，待批标签被关掉后要回到这里。
+        const nowActive = tabs.find(t => t.active)?.id ?? null;
+        if (nowActive && plan.tab !== nowActive) this.restoreTo = nowActive;
+        this.ensureWatch(cx);
         if (plan.kind === "open") {
           this.approvalsTab = plan.tab;
           run("tab.select", { id: plan.tab });
@@ -189,7 +237,15 @@ export default class Tabs extends View {
         }
         this.opening = Date.now();
         this.createError = null;
-        run("tab.new", { name: "待批", mod: "workbench-tabs", props: { approvals: true } });
+        this.createFailed = false;
+        try {
+          run("tab.new", { name: "待批", mod: "workbench-tabs", props: { approvals: true } });
+        } catch {
+          this.createFailed = true;
+          this.createError = "创建待批标签失败，请重试";
+          this.opening = 0;
+          this.stopWatch();
+        }
       })
       .child(statusIcon(bad ? "idle" : "blocked", t))
       .child(div().text_size(12).font_medium().child(bad ? "待批 ?" : `待批 ${s.count}`));
@@ -261,7 +317,7 @@ export default class Tabs extends View {
     // 全部处理完：不再列条目，只给“已全部处理”与去留说明；自动关闭由轮询按规则做。
     if (state.kind === "empty") {
       const pane = panes().find(p => p && p.mod === "workbench-tabs");
-      const space = spaces().find(s => s.id === pane?.space);
+      const space = spaces().find(s => (s.tabs ?? []).some(t => t.id === pane?.tab));
       const tabs = space?.tabs ?? [];
       const hint = tabs.length <= 1 ? "本空间仅此标签，可手动关闭" : "切到其他标签后会自动关闭";
       return v_flex().w_full().p(10).gap(6)

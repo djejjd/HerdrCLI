@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   splitRow, parseLedger, rowKey, countRows, ageText, classifyTarget, chipState, PendingStore, fixturePath, listPlan,
-  nextEmptyStreak, closePlan, navPlan, ledgerSignature, pickState,
+  nextEmptyStreak, closePlan, navPlan, ledgerSignature, pickState, closeFocusPlan, creationHint,
 } from '../mods/workbench-tabs/pending.js';
 
 const HEAD = '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |';
@@ -297,11 +297,11 @@ test('导航：tracked 存活优先复用，否则按 panes 兜底，随后才�
   assert.deepEqual(navPlan({ panes, tabs, tracked: 'tb9', now: 1000 }), { kind: 'open', tab: 'tb1', pane: 'p1' });
 });
 
-test('导航：在途锁 1.5 秒内重复点击只等待，不重复新建', () => {
+test('导航：在途锁 5 秒内重复点击只等待，不重复新建', () => {
   const args = { panes: [], tabs: [{ id: 'tb1' }], tracked: null, opening: 10_000 };
   assert.equal(navPlan({ ...args, now: 10_500 }).kind, 'wait', '500ms 内重复点');
-  assert.equal(navPlan({ ...args, now: 11_400 }).kind, 'wait', '1.4s 仍是等待');
-  assert.equal(navPlan({ ...args, now: 11_600 }).kind, 'create', '1.5s 后允许重试');
+  assert.equal(navPlan({ ...args, now: 14_900 }).kind, 'wait', '4.9s 仍是等待');
+  assert.equal(navPlan({ ...args, now: 15_100 }).kind, 'create', '5s 后允许重试');
 });
 
 test('连续三次开→关→再开：每个周期只允许一次新建', () => {
@@ -414,4 +414,71 @@ test('真实账本样例：1 条未处理 + 带括注的已处理 + 示例行', 
   assert.equal(rows.length, 3, '示例行被跳过');
   assert.equal(countRows(rows), 1);
   assert.equal(rows.find(r => !r.done).what, '决定是否合并 PR #7');
+});
+
+
+test('关闭后的焦点恢复：回到上一个会话，原窗已关则退到首个可用', () => {
+  const tabs = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+  // 待批标签还在：不切换
+  assert.equal(closeFocusPlan({ closing: 'b', prev: 'a', tabs }), null);
+  // 待批已关、上一个还在：回 a
+  assert.equal(closeFocusPlan({ closing: 'b', prev: 'a', tabs: [{ id: 'a' }, { id: 'c' }] }), 'a');
+  // 上一个也没了：退到同空间首个不是 closing 的
+  assert.equal(closeFocusPlan({ closing: 'b', prev: 'z', tabs: [{ id: 'a' }, { id: 'c' }] }), 'a');
+  // 只剩 closing 一个：没有可恢复目标
+  assert.equal(closeFocusPlan({ closing: 'b', prev: null, tabs: [] }), null);
+});
+
+test('跨 space 隔离：别的 space 的同名面板不算待批标签', () => {
+  const here = [{ id: 'h1' }, { id: 'h2' }];
+  const panes = [
+    { pane: 'p9', tab: 'x9', mod: 'workbench-tabs' },
+    { pane: 'p1', tab: 'h1', mod: 'workbench-tabs' },
+  ];
+  // 只认当前 space 的 tab 列表，别的 space 的同 mod 面板不参与
+  assert.deepEqual(navPlan({ panes, tabs: here, tracked: null, now: 1000 }), { kind: 'open', tab: 'h1', pane: 'p1' });
+  assert.deepEqual(navPlan({ panes: [panes[0]], tabs: here, tracked: null, now: 1000 }), { kind: 'create' });
+});
+
+test('在途锁与失败窗口统一 5 秒', () => {
+  const args = { panes: [], tabs: [{ id: 'a' }], tracked: null, opening: 10_000 };
+  assert.equal(navPlan({ ...args, now: 12_000 }).kind, 'wait');
+  assert.equal(navPlan({ ...args, now: 15_100 }).kind, 'create');
+  // pane 延迟 3 秒时才出现：两次点击也只建一次
+  let creates = 0;
+  const tabs = [{ id: 'a' }];
+  const click = (now) => {
+    const plan = navPlan({ panes: [], tabs, tracked: null, opening: creates ? 10_000 : 0, now, cooldown: 5000 });
+    if (plan.kind === 'create') creates += 1;
+    return plan.kind;
+  };
+  assert.equal(click(10_000), 'create');
+  assert.equal(click(13_000), 'wait');
+  assert.equal(creates, 1);
+});
+
+test('表头扫描：跳过前置表，直到含「要你做什么」的那张表', () => {
+  const text = [
+    '| 项目 | 负责人 |',
+    '|---|---|',
+    '| HerdrCLI | t16 |',
+    '',
+    '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |',
+    '|---|---|---|---|---|---|',
+    `| 甲 | 待用户 | i | w | ${T} | P |`,
+  ].join('\n');
+  const p = parseLedger(text);
+  assert.equal(p.error, null);
+  assert.deepEqual(p.rows.map(r => r.what), ['甲']);
+
+  const unrelated = parseLedger('| 项目 | 负责人 |\n|---|---|\n| A | B |');
+  assert.equal(unrelated.error, 'no-what', '有表但没有必需列');
+  assert.equal(parseLedger('纯文字没有表格').error, 'no-header');
+});
+
+test('创建提示：出现即清除，失败立刻提示，5 秒没出现算超时', () => {
+  assert.equal(creationHint({ appearing: true, opening: 10_000, now: 10_100 }), null);
+  assert.equal(creationHint({ appearing: false, failed: true, opening: 10_000, now: 10_100 }), 'failed');
+  assert.equal(creationHint({ appearing: false, opening: 10_000, now: 14_900 }), null);
+  assert.equal(creationHint({ appearing: false, opening: 10_000, now: 15_100 }), 'timeout');
 });

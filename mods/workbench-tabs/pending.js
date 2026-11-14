@@ -37,18 +37,19 @@ const cut = s => {
 export function parseLedger(text) {
   if (typeof text !== 'string') return { rows: [], error: 'unreadable' };
   const lines = text.replace(/\r\n?/g, '\n').split('\n');
-  // 第一张表的第一行就是表头；缺必需列与“根本没有表”要分开报。
+  // 账本前面可能有别的表（元信息、索引）：一直扫到含「要你做什么」的表头为止。
+  // 一张表都没有 = no-header；有表但没有必需列 = no-what。
   let header = null;
   let start = 0;
+  let sawTable = false;
   for (let i = 0; i < lines.length; i += 1) {
     if (!lines[i].trim().startsWith('|')) continue;
     const cells = splitRow(lines[i]);
     if (cells.length >= 2 && cells.every(c => /^:?-{2,}:?$/.test(c))) continue;
-    header = cells;
-    start = i + 1;
-    break;
+    sawTable = true;
+    if (cells.includes(WHAT)) { header = cells; start = i + 1; break; }
   }
-  if (!header) return { rows: [], error: 'no-header' };
+  if (!header) return { rows: [], error: sawTable ? 'no-what' : 'no-header' };
   const at = name => header.indexOf(name);
   if (at(WHAT) < 0) return { rows: [], error: 'no-what' };
   // 状态列必填：没有它就无法区分未处理与已处理，不能猜。
@@ -240,14 +241,17 @@ export function closePlan({ kind, active, tabCount, emptyStreak }) {
 
 /** chip 点击的去向：优先复用已跟踪且仍存活的标签，其次 panes 兜底，
  *  最后才新建；创建后在途锁内重复点击只返回 wait，避免连点建出两个标签。 */
-export function navPlan({ panes, tabs, tracked, opening, now = Date.now(), cooldown = 1500 } = {}) {
+export function navPlan({ panes, tabs, tracked, opening, now = Date.now(), cooldown = 5000 } = {}) {
   const list = Array.isArray(panes) ? panes : [];
-  const alive = Boolean(tracked) && (Array.isArray(tabs) ? tabs : []).some(t => t && t.id === tracked);
+  const ids = new Set((Array.isArray(tabs) ? tabs : []).map(t => t && t.id));
+  // 只认当前 space 的 tab；别的 space 里同 mod 的面板不参与查重。
+  const mine = list.filter(p => p && ids.has(p.tab));
+  const alive = Boolean(tracked) && ids.has(tracked);
   if (alive) {
-    const pane = list.find(p => p && p.tab === tracked);
+    const pane = mine.find(p => p.tab === tracked);
     return { kind: 'open', tab: tracked, pane: pane?.pane ?? null };
   }
-  const hit = list.find(p => p && p.mod === 'workbench-tabs');
+  const hit = mine.find(p => p.mod === 'workbench-tabs');
   if (hit) return { kind: 'open', tab: hit.tab, pane: hit.pane };
   if (opening && now - Number(opening) < cooldown) return { kind: 'wait' };
   return { kind: 'create' };
@@ -281,4 +285,22 @@ export function pickState(sharedState, ownState) {
   if (!sh) return own;
   if (!own) return sh;
   return (Number(own.at) || 0) >= (Number(sh.at) || 0) ? own : sh;
+}
+
+/** 待批标签关闭后回到哪：标签还在就不动；上一个会话还在就回它；
+ *  否则回同 space 的第一个可用标签；一个都没有则不切。 */
+export function closeFocusPlan({ closing, prev, tabs } = {}) {
+  const all = Array.isArray(tabs) ? tabs.filter(t => t && t.id) : [];
+  if (all.some(t => t.id === closing)) return null;
+  const rest = all.filter(t => t.id !== closing);
+  if (prev && rest.some(t => t.id === prev)) return prev;
+  return rest[0]?.id ?? null;
+}
+
+/** 创建待批标签的提示：出现即清；run 抛错立刻失败；超过 5 秒没出现算超时。 */
+export function creationHint({ appearing, failed, opening, now = Date.now(), timeout = 5000 } = {}) {
+  if (appearing) return null;
+  if (failed) return 'failed';
+  if (opening && now - Number(opening) >= timeout) return 'timeout';
+  return null;
 }
