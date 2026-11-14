@@ -5,7 +5,7 @@ import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, 
 import { View, div, svg, image } from "gpui-kit";
 import * as fsPromises from "fs/promises";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
-import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, props, home, exec, readTextFile, hc } from "herdr";
+import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, props, home, appHome, exec, readTextFile, hc } from "herdr";
 
 const PAGE = 6;
 const REASONS = { "no-header": "没有表格表头", "no-what": "缺「要你做什么」列", "no-status": "缺「状态」列", unreadable: "内容不是文本" };
@@ -55,13 +55,13 @@ export default class Tabs extends View {
 
   // 只记时间/Space/错误首行，不写账本正文；写失败也不影响界面。
   logCreateFailure(line) {
-    try { fsPromises.appendFile("/tmp/approvals-create.log", `${line}\n`).catch(() => {}); } catch {}
+    try { fsPromises.appendFile(`${appHome()}/approvals-create.log`, `${line}\n`).catch(() => {}); } catch {}
   }
 
   // 清理日志：只有 Space、保留 id、关了几个、收起了几个。
   logCleanup(spaceId, plan) {
     const line = cleanupLogLine({ spaceId, plan });
-    try { fsPromises.appendFile("/tmp/approvals-cleanup.log", `${line}\n`).catch(() => {}); } catch {}
+    try { fsPromises.appendFile(`${appHome()}/approvals-cleanup.log`, `${line}\n`).catch(() => {}); } catch {}
   }
 
   close() {
