@@ -63,6 +63,8 @@ export default class Tabs extends View {
       return;
     }
     this.timer = cx.timer.every(5000, c => this.pollApprovals(c));
+    // 侧栏请求快速消费：不占 5 秒轮询。
+    this.reqTimer = cx.timer.every(500, c => this.consumeRequest(c));
     this.pollApprovals(cx);
   }
 
@@ -101,10 +103,40 @@ export default class Tabs extends View {
     try { fsPromises.appendFile(`${appHome()}/approvals-cleanup.log`, `${line}\n`).catch(() => {}); } catch {}
   }
 
+  // 侧栏点击：清 marker → 已有则展开/选中；没有则建，建完选中（select 自带展开）。
+  consumeRequest(cx) {
+    const req = requestPlan({ request: shared("approvals.openRequest") });
+    if (!req) return;
+    setShared("approvals.openRequest", null);
+    const sp = spaces().find(s => s.id === req.space);
+    if (!sp) return;
+    const markers = JSON.parse(localStorage.getItem("approvals.closed") ?? "{}");
+    delete markers[req.space];
+    localStorage.setItem("approvals.closed", JSON.stringify(markers));
+    const ours = (sp.tabs ?? []).find(t => t.name === "待批" && panes().find(p => p && p.tab === t.id)?.mod === "workbench-tabs");
+    if (ours) {
+      if (ours.settled) run("tab.unsettle", { id: ours.id });
+      run("tab.select", { id: ours.id });
+      return;
+    }
+    try { run("tab.new", createArgs2({ space: req.space })); } catch { return; }
+    cx.timer.after(400, () => {
+      const tabs = spaces().find(s => s.id === req.space)?.tabs ?? [];
+      const tab = tabs.find(t => t.name === "待批");
+      if (!tab) return;
+      this.created[req.space] = createdRing(this.created[req.space], tab.id, 20);
+      localStorage.setItem("approvals.created", JSON.stringify(this.created));
+      if (tab.settled) run("tab.unsettle", { id: tab.id });
+      run("tab.select", { id: tab.id });
+    });
+  }
+
   close() {
     this.store?.close();
     this.timer?.cancel?.();
     this.timer = null;
+    this.reqTimer?.cancel?.();
+    this.reqTimer = null;
   }
 
   // 账本路径：默认全局账本；fixture 覆盖仅在有效期内且指向临时目录时生效，非法/过期立刻清掉。
