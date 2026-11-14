@@ -332,3 +332,13 @@ export function pickApprovalsPane(panes, tabs, mod = 'workbench-tabs') {
   const ids = new Set((Array.isArray(tabs) ? tabs : []).map(t => t && t.id));
   return (Array.isArray(panes) ? panes : []).find(p => p && p.mod === mod && ids.has(p.tab)) ?? null;
 }
+
+/** chip 是否要渲染：hidden/empty 完全不渲染（不占位）；缺失与错误要露出待批 ?。 */
+export function chipNode(state) {
+  return chipState(state).kind !== 'hidden';
+}
+
+/** 全局行数（未处理且没有 Space 标记），用于 chip tooltip 的“含全局 N”。 */
+export function globalCount(rows) {
+  return (Array.isArray(rows) ? rows : []).filter(r => r && !r.done && !String(r.space ?? '').trim()).length;
+}

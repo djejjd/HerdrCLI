@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   splitRow, parseLedger, rowKey, countRows, ageText, classifyTarget, chipState, PendingStore, fixturePath, listPlan,
-  nextEmptyStreak, closePlan, navPlan, ledgerSignature, pickState, closeFocusPlan, creationHint, rowsForSpace, pickApprovalsPane,
+  nextEmptyStreak, closePlan, navPlan, ledgerSignature, pickState, closeFocusPlan, creationHint, rowsForSpace, pickApprovalsPane, chipNode, globalCount,
 } from '../mods/workbench-tabs/pending.js';
 
 const HEAD = '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |';
@@ -609,4 +609,34 @@ test('三种 Space 分支：未知按全局、别的现存 Space 隐藏、空 Sp
   // 空 Space（无终端、无名字）→ 只剩全局；没有全局就是 0
   assert.equal(countRows(rowsForSpace(rows, { id: 'spNew', name: '' }, known)), 1);
   assert.equal(countRows(rowsForSpace([{ what: 'A 的行', space: 'AIAgentCLI' }], { id: 'spNew', name: '' }, known)), 0);
+});
+
+
+test('0 条时不渲染 chip 节点（不占位），有内容才渲染', () => {
+  assert.equal(chipNode({ kind: 'hidden' }), false);
+  assert.equal(chipNode({ kind: 'empty' }), false);
+  assert.equal(chipNode({ kind: 'count', count: 1 }), true);
+  assert.equal(chipNode({ kind: 'missing' }), true, '缺失要露出待批 ?');
+});
+
+test('全局计数：只算未处理且没有 Space 的行', () => {
+  const rows = [
+    { what: '全局未处理', space: '', done: false },
+    { what: '全局已处理', space: '', done: true },
+    { what: '本 Space', space: 'AIAgentCLI', done: false },
+    { what: '别的 Space', space: 'AIBot', done: false },
+  ];
+  assert.equal(globalCount(rows), 1);
+  assert.equal(globalCount([]), 0);
+  assert.equal(globalCount(null), 0);
+});
+
+test('自动关闭只看非激活：激活中的待批标签 0 条也不关', () => {
+  assert.equal(closePlan({ kind: 'empty', active: true, tabCount: 3, emptyStreak: 5 }), 'banner');
+  assert.equal(closePlan({ kind: 'empty', active: false, tabCount: 3, emptyStreak: 2 }), 'close');
+});
+
+test('静态检查：不得使用永久占位（emptySlot / approvals-slot）', () => {
+  const main = readFileSync(new URL('../mods/workbench-tabs/main.js', import.meta.url), 'utf8');
+  assert.equal(/emptySlot|approvals-slot/.test(main), false, '0 条应完全不渲染 chip');
 });

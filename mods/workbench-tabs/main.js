@@ -1,7 +1,7 @@
 // 工作台标签栏：沿用 Herdr 原生行为与已核实菜单，统一状态图标。
 import { statusIcon } from './status.js';
 import { sidebarToggle } from './controls.js';
-import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, nextEmptyStreak, closePlan, navPlan, ledgerSignature, pickState, closeFocusPlan, creationHint, rowsForSpace, countRows, pickApprovalsPane } from './pending.js';
+import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, nextEmptyStreak, closePlan, navPlan, ledgerSignature, pickState, closeFocusPlan, creationHint, rowsForSpace, countRows, pickApprovalsPane, chipNode, globalCount } from './pending.js';
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, props, home, exec, readTextFile } from "herdr";
@@ -208,7 +208,8 @@ export default class Tabs extends View {
     const where = this.ledgerPath();
     if (s.kind === "missing") return `账本缺失：${where}`;
     if (s.kind === "error") return `账本无法解析（${REASONS[s.reason] ?? s.reason}）：${where}`;
-    return `待批 ${s.count} 条 · 账本 ${where}`;
+    const all = s.globalCount ? `（含全局 ${s.globalCount}）` : "";
+    return `待批 ${s.count} 条${all} · 账本 ${where}`;
   }
 
   // 当前 Space 的待批状态：全局行恒算，本 Space 行按名或 id 匹配；0 条即隐藏。
@@ -217,17 +218,15 @@ export default class Tabs extends View {
     if (!state || state.kind !== "count") return state ?? { kind: "hidden" };
     const rows = rowsForSpace(state.rows ?? [], spaces().find(s => s.active), spaces());
     const count = countRows(rows);
-    return count > 0 ? { kind: "count", count, rows } : { kind: "hidden" };
+    return count > 0 ? { kind: "count", count, rows, globalCount: globalCount(rows) } : { kind: "hidden" };
   }
 
   approvalChip(t) {
-    // 固定槽位：0 条时渲染等宽透明占位，切 Space 时标签排布不跳。
-    const emptySlot = () => h_flex().id("approvals-slot").w(72).h(26).flex_none().items_center().justify_center();
-    const slot = (child) => emptySlot().child(child);
+    // 0 条时完全不渲染（不建容器、不占宽），后面的标签自然靠过来。
     const s = chipState(this.localApprovals());
-    if (s.kind === "hidden") return emptySlot();
+    if (!chipNode(s)) return null;
     const bad = s.kind === "missing" || s.kind === "error";
-    return slot(h_flex().id("approvals-chip").h(26).px(7).gap(5).flex_none().items_center().rounded(6)
+    return h_flex().id("approvals-chip").h(26).px(7).gap(5).flex_none().items_center().rounded(6)
       .bg(t.hover).text_color(bad ? t.dim : t.blocked).cursor_pointer()
       .tooltip(this.hint(s))
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
@@ -261,7 +260,7 @@ export default class Tabs extends View {
         }
       })
       .child(statusIcon(bad ? "idle" : "blocked", t))
-      .child(div().text_size(12).font_medium().child(bad ? "待批 ?" : `待批 ${s.count}`)));
+      .child(div().text_size(12).font_medium().child(bad ? "待批 ?" : `待批 ${s.count}`));
   }
 
   approvalRow(r, t) {
@@ -273,7 +272,9 @@ export default class Tabs extends View {
         .child(div().text_size(11).text_color(t.dim).child(ageText(r))))
       .when(Boolean(r.impact), el => el.child(div().text_size(11.5).text_color(t.muted).truncate().child(`不做会怎样：${r.impact}`)))
       .child(h_flex().gap(6).items_center()
-        .child(div().text_size(11).text_color(t.dim).child(r.space ? (r.project || r.space) : "全局"))
+        .child(div().text_size(11).text_color(t.dim)
+          .tooltip(r.space ? (r.project || r.space) : "全局条目：所有 Space 都显示")
+          .child(r.space ? (r.project || r.space) : "全局"))
         .child(div().flex_1())
         .child(h_flex().h(20).px(6).items_center().rounded(5).cursor_pointer().bg(t.hover)
           .on_click((_e, cx) => { cx.stop_propagation(); this.toggleAck(key); cx.notify(); })
@@ -372,6 +373,7 @@ export default class Tabs extends View {
   render() {
     const t = theme();
     if (props()?.approvals) return this.approvalsPanel(t);
+    const chip = this.approvalChip(t);
     const space = spaces().find(p => p.active);
     const shown = space?.tabs ?? [];
     const active = shown.findIndex(tab => tab.active);
@@ -430,7 +432,7 @@ export default class Tabs extends View {
       .on_mouse_up("left", () => { this.pressed = null; })
       .on_scroll_wheel(e => { if (Math.abs(e.delta.y) >= 1) run(e.delta.y > 0 ? "tab.prev" : "tab.next"); })
       .child(button("sidebar-toggle", svg(side.icon).size(14), () => run(side.command, side.args)).tooltip(side.label))
-      .when(chipState(this.store?.state).kind !== "hidden", el => el.child(this.approvalChip(t)))
+      .when(Boolean(chip), el => el.child(chip))
       .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(2).overflow_x_scrollbar().track_scroll(this.scroll)
         .on_size_change((_size, cx) => { if (active >= 0) { this.scroll.scroll_to_item(active); cx.notify(); } })
         .children(shown.map(item)))
