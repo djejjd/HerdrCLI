@@ -7,6 +7,8 @@ import * as fsPromises from "fs/promises";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, props, home, appHome, exec, readTextFile, hc } from "herdr";
 
+// 待批功能总开关：false = 不轮询、不建标签、不渲染 chip（2026-11-15 暂时停用）。
+const APPROVALS_ENABLED = false;
 const PAGE = 6;
 const REASONS = { "no-header": "没有表格表头", "no-what": "缺「要你做什么」列", "no-status": "缺「状态」列", unreadable: "内容不是文本" };
 
@@ -64,10 +66,19 @@ export default class Tabs extends View {
       });
       return;
     }
-    this.timer = cx.timer.every(5000, c => this.pollApprovals(c));
-    // 侧栏请求快速消费：不占 5 秒轮询。
-    this.reqTimer = cx.timer.every(500, c => this.consumeRequest(c));
-    this.pollApprovals(cx);
+    if (APPROVALS_ENABLED) {
+      this.timer = cx.timer.every(5000, c => this.pollApprovals(c));
+      // 侧栏请求快速消费：不占 5 秒轮询。
+      this.reqTimer = cx.timer.every(500, c => this.consumeRequest(c));
+      this.pollApprovals(cx);
+    } else {
+      // 停用期间关闭已存在的待批标签，避免旧页面残留。
+      for (const sp of spaces()) {
+        for (const tab of sp.tabs ?? []) {
+          if (tab && tab.name === '待批') { try { run('tab.close', { id: tab.id, confirmed: true }); } catch {} }
+        }
+      }
+    }
   }
 
   // 只记时间/Space/错误首行，不写账本正文；写失败也不影响界面。
@@ -425,6 +436,7 @@ export default class Tabs extends View {
   }
 
   approvalChip(t) {
+    if (!APPROVALS_ENABLED) return null;
     // 0 条时完全不渲染（不建容器、不占宽），后面的标签自然靠过来。
     const s = chipState(this.localApprovals());
     if (!chipNode(s)) return null;
