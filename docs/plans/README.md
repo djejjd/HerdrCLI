@@ -11,3 +11,4 @@
 |---|---|---|---|---|
 | P-01 | Agent 工作台与会话恢复 | implemented | 剩余未验项见实施计划；后续可选：系统通知 helper | 2026-11-14 |
 | P-02 | 多 Agent 协作规范 | implemented | 已上卷为通用 `~/ai/collab.md` + §6 A-09~A-12；项目侧见 ADR-0003（superseded） | 2026-11-14 |
+| P-03 | 终端页待批 chip 与只读列表 | in review | PR #7（feat/approval-chip）待审；弹层为静态布局证据，点击链路待用户实测；全局账本由 t19 写入 | 2026-11-14 |
