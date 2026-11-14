@@ -1,7 +1,7 @@
 // 工作台标签栏：沿用 Herdr 原生行为与已核实菜单，统一状态图标。
 import { statusIcon } from './status.js';
 import { sidebarToggle } from './controls.js';
-import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, pickApprovalsPane, chipNode, globalCount, filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, cleanupPlan, rowActions, decisionEvent, chipLabel } from './pending.js';
+import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, pickApprovalsPane, chipNode, globalCount, filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, cleanupPlan, cleanupLogLine, rowActions, decisionEvent, chipLabel } from './pending.js';
 import { View, div, svg, image } from "gpui-kit";
 import * as fsPromises from "fs/promises";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
@@ -60,7 +60,7 @@ export default class Tabs extends View {
 
   // 清理日志：只有 Space、保留 id、关了几个、收起了几个。
   logCleanup(spaceId, plan) {
-    const line = `${new Date().toISOString()} space=${spaceId ?? '?'} keep=${plan.keep} closed=${plan.close.length} settled=${plan.settle.length}`;
+    const line = cleanupLogLine({ spaceId, plan });
     try { fsPromises.appendFile("/tmp/approvals-cleanup.log", `${line}\n`).catch(() => {}); } catch {}
   }
 

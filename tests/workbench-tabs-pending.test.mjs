@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
   splitRow, parseLedger, rowKey, countRows, ageText, classifyTarget, chipState, PendingStore, fixturePath, listPlan,
   ledgerSignature, pickState, rowsForSpace, pickApprovalsPane, chipNode, globalCount,
-  filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, cleanupPlan, rowActions, decisionEvent, chipLabel,
+  filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, cleanupPlan, cleanupLogLine, rowActions, decisionEvent, chipLabel,
 } from '../mods/workbench-tabs/pending.js';
 
 const HEAD = '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |';
@@ -644,4 +644,13 @@ test('cleanupPlan：名字像但 pane 不是我们的 mod -> 不 close，只 set
   assert.deepEqual(cleanupPlan([TT('a'), TT('b')], [PP('a')]), { keep: 'a', close: [], settle: ['b'] });
   // 幂等：只剩 keep 且有别的标签 -> 无动作
   assert.deepEqual(cleanupPlan([TT('a'), { id: 'e', name: 'x' }], [PP('a')]), { keep: 'a', close: [], settle: [] });
+});
+
+
+test('清理日志行：含 keep、closed id 列表、settled 数', () => {
+  const line = cleanupLogLine({ spaceId: 'sp1', plan: { keep: 'k', close: ['a', 'b'], settle: ['c'] }, now: 1700000000000 });
+  assert.match(line, /space=sp1/);
+  assert.match(line, /keep=k/);
+  assert.match(line, /closed=a,b/);
+  assert.match(line, /settled=1/);
 });

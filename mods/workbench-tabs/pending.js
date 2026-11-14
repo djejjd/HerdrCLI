@@ -406,10 +406,17 @@ export function cleanupPlan(tabs, panes) {
   if (!pending.length) return { keep: null, close: [], settle: [] };
   const paneOf = id => (Array.isArray(panes) ? panes : []).find(p => p && p.tab === id);
   const ours = t => paneOf(t.id)?.mod === 'workbench-tabs';
+  // active 一律保留；关闭只发生在“有 keep 保底、且非 active”的重复项上。
   const keepTab = pending.find(t => t.active) ?? pending[0];
   const others = pending.filter(t => t !== keepTab);
   const close = others.filter(ours).map(t => t.id);
   const settle = others.filter(t => !ours(t)).map(t => t.id);
   if (all.length === 1 && !keepTab.settled) settle.push(keepTab.id);
   return { keep: keepTab.id, close, settle };
+}
+
+/** 清理日志一行：保留 id、被关的 id 列表、被收起的数量。 */
+export function cleanupLogLine({ spaceId, plan, now = Date.now() } = {}) {
+  const closed = (plan?.close ?? []).join(',');
+  return `${new Date(now).toISOString()} space=${spaceId ?? '?'} keep=${plan?.keep ?? '-'} closed=${closed || '-'} settled=${(plan?.settle ?? []).length}`;
 }
