@@ -405,16 +405,14 @@ export default class Workbench extends View {
     if(!fmt)return null;
     const stamp=refreshStamp(this.usage?.stateAt);
     const tip=[feeTooltip(state),stamp].filter(Boolean).join(' · ');
-    // 三合一：s:¥2.04 · 1d:¥12.3 · 7d:¥45.6；无数据的段只显示占位，不显示 ¥0.00。
+    // 三组合成一组：标签+值成对，label 11.5、值 13 medium；组间 10，不再塞 dim 分隔点。
     if(fmt.kind==='ready'||fmt.kind==='partial'||fmt.kind==='unknown'){
-      const parts=[];
-      feeSegments(state).forEach((seg,i)=>{
-        if(i)parts.push(div().text_size(11).text_color(t.dim).child('·'));
-        parts.push(div().text_size(11.5).text_color(t.muted).child(`${seg.label}:`));
-        parts.push(div().text_size(14).font_semibold().text_color(seg.value?t.foreground:t.muted).child(seg.value??'–'));
-      });
-      return h_flex().id('usage-totals').items_center().gap(6).flex_wrap()
-        .when(tip,e=>e.tooltip(tip)).children(parts);
+      const pairs=feeSegments(state).map(seg=>
+        h_flex().flex_none().items_center().gap(4)
+          .child(div().text_size(11.5).line_height('16px').text_color(t.muted).child(seg.label))
+          .child(div().text_size(13).font_medium().line_height('16px').text_color(seg.value?t.foreground:t.muted).child(seg.value??'–')));
+      return h_flex().id('usage-totals').items_center().gap(10).flex_wrap()
+        .when(tip,e=>e.tooltip(tip)).children(pairs);
     }
     const short=fmt.kind==='loading'?'费用估算读取中…':'费用估算失败';
     return div().id('usage-estimate').text_size(12.5)
@@ -437,8 +435,8 @@ export default class Workbench extends View {
     const shell=(lines)=>v_flex().id('quota').flex_none().h(footerHeight(this.rootWidth)).px(14).py(11).gap(7)
       .border_t_1().border_color(t.border).bg(t.chrome)
       .child(h_flex().gap(6).items_center()
-        .child(div().text_size(12.5).font_medium().text_color(t.foreground).child(name))
-        .when(shown.status==='ready'&&shown.plan,e=>e.child(div().text_size(12).text_color(t.muted).child(shown.plan)))
+        .child(div().text_size(12.5).font_medium().line_height('16px').text_color(t.foreground).child(name))
+        .when(shown.status==='ready'&&shown.plan,e=>e.child(div().text_size(12).line_height('16px').text_color(t.muted).child(shown.plan)))
         .child(div().flex_1()))
       .child(v_flex().id('quota-lines').gap(6).children(lines));
     // 费用行只在 quota 无数据源（unknown）时使用；loading/error/过期不盖额度状态。
@@ -455,16 +453,16 @@ export default class Workbench extends View {
       .tooltip(st.reason?String(st.reason):(age===null?'缺少快照时间':'快照超过 1 小时'));
     const groups=quotaGroups(shown);
     const line=groups.length
-      ? h_flex().items_center().gap(20).flex_wrap().children(groups.map(g=>
-          h_flex().flex_none().items_center().gap(6)
-            .child(div().text_size(12).text_color(t.muted).child(g.label))
-            .child(div().text_size(14).font_semibold().text_color(g.low?t.blocked:t.foreground).child(g.value))))
+      ? h_flex().items_center().gap(16).flex_wrap().children(groups.map(g=>
+          h_flex().flex_none().items_center().gap(4)
+            .child(div().text_size(11.5).line_height('16px').text_color(t.muted).child(g.label))
+            .child(div().text_size(13).font_medium().line_height('16px').text_color(g.low?t.blocked:t.foreground).child(g.value))))
       : div().text_size(12.5).text_color(t.muted).child('额度未知');
     // Codex 三行：品牌+plan / 额度组 / 重置行；1d/7d 费用只进 tooltip，不占版面高度。
     const reset=resetHint(shown);
     const usageState=this.usage?.stateKey===key?this.usage.state:null;
     const tip=quotaTooltip(shown,{ageMs:age,refreshedAt:this.quota.stateAt,failure:raw.status==='error'?raw.reason:null,usageState});
-    return shell([line,reset?div().id('quota-reset').text_size(11.5).text_color(t.muted).child(reset):null].filter(Boolean))
+    return shell([line,reset?div().id('quota-reset').text_size(11.5).line_height('16px').text_color(t.muted).child(reset):null].filter(Boolean))
       .when(tip,e=>e.tooltip(tip));
   }
   cancelDrag(cx,src='other') {
