@@ -4,8 +4,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   splitRow, parseLedger, rowKey, countRows, ageText, classifyTarget, chipState, PendingStore, fixturePath, listPlan,
-  ledgerSignature, pickState, rowsForSpace, chipNode, globalCount,
-  chipToggle, chipLabel, rowActions, decisionEvent,
+  ledgerSignature, pickState, rowsForSpace, pickApprovalsPane, chipNode, globalCount,
+  navPlan, closeFocusPlan, closePlan, creationHint, rowActions, decisionEvent, chipLabel,
 } from '../mods/workbench-tabs/pending.js';
 
 const HEAD = '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |';
@@ -464,18 +464,36 @@ test('全局计数：只算未处理且没有 Space 的行', () => {
   assert.equal(globalCount(null), 0);
 });
 
-test('chipToggle：只开关浮层，任何情况都不新建/切换标签', () => {
-  assert.equal(chipToggle({ open: true }), 'close');
-  assert.equal(chipToggle({ open: false }), 'popup');
-  assert.equal(chipToggle({}), 'popup');
+test('navPlan：tracked 存活或 panes 命中→复用；锁内→等待；否则→新建', () => {
+  const tabs = [{ id: 'm' }, { id: 'tb1' }];
+  const panes = [{ pane: 'p1', tab: 'tb1', mod: 'workbench-tabs' }];
+  assert.deepEqual(navPlan({ panes, tabs, tracked: 'tb1', now: 1000 }), { kind: 'open', tab: 'tb1', pane: 'p1' });
+  assert.deepEqual(navPlan({ panes, tabs, tracked: null, now: 1000 }), { kind: 'open', tab: 'tb1', pane: 'p1' });
+  assert.equal(navPlan({ panes: [], tabs, tracked: null, opening: 9000, now: 9500 }).kind, 'wait');
+  assert.equal(navPlan({ panes: [], tabs, tracked: null, opening: 9000, now: 14_500 }).kind, 'create');
+  // 别的 Space 的面板不参与
+  assert.equal(navPlan({ panes: [{ pane: 'p9', tab: 'x9', mod: 'workbench-tabs' }], tabs, tracked: null, now: 1000 }).kind, 'create');
 });
 
-test('chipLabel：只给数字或 ?，不带「待批」字样', () => {
-  assert.equal(chipLabel({ kind: 'count', count: 1 }), '1');
-  assert.equal(chipLabel({ kind: 'count', count: 12 }), '12');
-  assert.equal(chipLabel({ kind: 'missing' }), '?');
-  assert.equal(chipLabel({ kind: 'error' }), '?');
-  assert.equal(chipLabel({ kind: 'hidden' }), '');
+test('closeFocusPlan：回 prev；prev 没了回首个；标签还在→null', () => {
+  assert.equal(closeFocusPlan({ closing: 'b', prev: 'a', tabs: [{ id: 'a' }, { id: 'b' }] }), null);
+  assert.equal(closeFocusPlan({ closing: 'b', prev: 'a', tabs: [{ id: 'a' }, { id: 'c' }] }), 'a');
+  assert.equal(closeFocusPlan({ closing: 'b', prev: 'z', tabs: [{ id: 'a' }, { id: 'c' }] }), 'a');
+  assert.equal(closeFocusPlan({ closing: 'b', prev: null, tabs: [] }), null);
+});
+
+test('closePlan：激活只提示；最后一个标签不关；非激活且>1 才关', () => {
+  assert.equal(closePlan({ kind: 'empty', active: true, tabCount: 3, emptyStreak: 5 }), 'banner');
+  assert.equal(closePlan({ kind: 'empty', active: false, tabCount: 1, emptyStreak: 5 }), 'banner');
+  assert.equal(closePlan({ kind: 'empty', active: false, tabCount: 2, emptyStreak: 2 }), 'close');
+  assert.equal(closePlan({ kind: 'count', active: false, tabCount: 3, emptyStreak: 2 }), 'keep');
+});
+
+test('creationHint：出现清除、失败立即提示、5 秒超时', () => {
+  assert.equal(creationHint({ appearing: true, opening: 1000, now: 1100 }), null);
+  assert.equal(creationHint({ appearing: false, failed: true, opening: 1000, now: 1100 }), 'failed');
+  assert.equal(creationHint({ appearing: false, opening: 1000, now: 4900 }), null);
+  assert.equal(creationHint({ appearing: false, opening: 1000, now: 6100 }), 'timeout');
 });
 
 test('动作映射：授权两按钮、选择四按钮；类型缺失按授权', () => {
@@ -521,14 +539,27 @@ test('决定事件文案：含类型、决定、时间、标题；选其它带�
   assert.match(none, /都不行/);
 });
 
-test('静态检查：chip 路径不得新建/切换标签，正文不得出现「待批」', () => {
+test('静态检查：chip 路径不得出现 tab.new，且不得引用已删除的旧函数', () => {
   const main = readFileSync(new URL('../mods/workbench-tabs/main.js', import.meta.url), 'utf8');
-  const start = main.indexOf("approvalChip(t) {");
-  const end = main.indexOf("\n  approvalRow(", start);
-  const body = main.slice(start, end > start ? end : undefined);
-  assert.equal(/tab\.new/.test(body), false, 'chip 不得新建标签');
-  assert.equal(/tab\.select/.test(body), false, 'chip 不得切换标签');
-  assert.equal(/\.child\(`待批/.test(body), false, 'chip 正文不得出现待批');
-  assert.equal(/\.child\("待批/.test(body), false, 'chip 正文不得出现待批');
-  assert.match(body, /chipLabel\(/, 'chip 正文应由 chipLabel 生成');
+  assert.equal(/openOverlay\(\{\s*mod:\s*"workbench-tabs"/.test(main), false, 'chip 路径不得再开浮层');
+  for (const dead of ['chipAction']) {
+    assert.equal(new RegExp(`\\b${dead}\\b`).test(main), false, `死代码未清：${dead}`);
+  }
+});
+
+
+test('chipLabel：只给数字或 ?，不带「待批」字样', () => {
+  assert.equal(chipLabel({ kind: 'count', count: 1 }), '1');
+  assert.equal(chipLabel({ kind: 'count', count: 12 }), '12');
+  assert.equal(chipLabel({ kind: 'missing' }), '?');
+  assert.equal(chipLabel({ kind: 'error', reason: 'x' }), '?');
+  assert.equal(chipLabel({ kind: 'hidden' }), '');
+  for (const v of ['1', '12', '?']) assert.equal(/[^0-9?]/.test(v), false, `只允许数字或问号：${v}`);
+});
+
+test('静态：chip 渲染不得出现字面量「待批」，正文只用 chipLabel', () => {
+  const main = readFileSync(new URL('../mods/workbench-tabs/main.js', import.meta.url), 'utf8');
+  assert.equal(/\.child\(`待批/.test(main), false);
+  assert.equal(/\.child\("待批/.test(main), false);
+  assert.match(main, /chipLabel\(/, 'chip 正文应由 chipLabel 生成');
 });

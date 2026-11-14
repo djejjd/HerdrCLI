@@ -292,6 +292,11 @@ export function rowsForSpace(rows, space, knownSpaces = []) {
   });
 }
 
+/** 某个 Space 的待批面板（mod pane）：只认该 Space 的 tab，避免跨 Space 误伤。 */
+export function pickApprovalsPane(panes, tabs, mod = 'workbench-tabs') {
+  const ids = new Set((Array.isArray(tabs) ? tabs : []).map(t => t && t.id));
+  return (Array.isArray(panes) ? panes : []).find(p => p && p.mod === mod && ids.has(p.tab)) ?? null;
+}
 
 /** chip 是否要渲染：hidden/empty 完全不渲染（不占位）；缺失与错误要露出待批 ?。 */
 export function chipNode(state) {
@@ -303,20 +308,6 @@ export function globalCount(rows) {
   return (Array.isArray(rows) ? rows : []).filter(r => r && !r.done && !String(r.space ?? '').trim()).length;
 }
 
-/**
- * chip 点击只做浮层开关：开着→关；没开→弹层。绝不新建/切换标签。
- */
-export function chipToggle({ open } = {}) {
-  return open ? 'close' : 'popup';
-}
-
-/** chip 正文：只给数字或 ?；隐藏态返回空串（chip 不渲染）。 */
-export function chipLabel(state) {
-  const s = chipState(state);
-  if (s.kind === 'hidden') return '';
-  if (s.kind === 'missing' || s.kind === 'error') return '?';
-  return String(s.count);
-}
 
 /** 按类型给出动作集合：授权=批准/拒绝/稍后；选择=按建议/选其它/都不行/稍后。 */
 export function rowActions(type) {
@@ -345,4 +336,57 @@ export function decisionEvent(row, decision, now = Date.now()) {
   const at = new Date(now).toISOString();
   const title = String(row?.what ?? '').slice(0, 80);
   return `PENDING-DECISION｜${key}｜${type}｜${text}｜${at}｜${title}｜${row?.project ?? ''}`;
+}
+
+/** chip 点击去向：tracked 存活或 panes 命中当前 Space → 复用；5 秒锁内 → 等待；否则新建。 */
+export function navPlan({ panes, tabs, tracked, opening, now = Date.now(), cooldown = 5000 } = {}) {
+  const list = Array.isArray(panes) ? panes : [];
+  const ids = new Set((Array.isArray(tabs) ? tabs : []).map(t => t && t.id));
+  const mine = list.filter(p => p && ids.has(p.tab));
+  if (tracked && ids.has(tracked)) {
+    const pane = mine.find(p => p.tab === tracked);
+    return { kind: 'open', tab: tracked, pane: pane?.pane ?? null };
+  }
+  const hit = mine.find(p => p.mod === 'workbench-tabs');
+  if (hit) return { kind: 'open', tab: hit.tab, pane: hit.pane };
+  if (opening && now - Number(opening) < cooldown) return { kind: 'wait' };
+  return { kind: 'create' };
+}
+
+/** 待批标签关闭后回到哪：还在→null；prev 还在→prev；否则同 Space 首个；空→null。 */
+export function closeFocusPlan({ closing, prev, tabs } = {}) {
+  const all = Array.isArray(tabs) ? tabs.filter(t => t && t.id) : [];
+  if (all.some(t => t.id === closing)) return null;
+  const rest = all.filter(t => t.id !== closing);
+  if (prev && rest.some(t => t.id === prev)) return prev;
+  return rest[0]?.id ?? null;
+}
+
+/** 空态处理：激活只提示；最后一个标签不关（避免连 Space 一起关）；非激活且>1 才关。 */
+export function closePlan({ kind, active, tabCount, emptyStreak } = {}) {
+  if (kind !== 'empty') return 'keep';
+  if (Number(emptyStreak) < 2) return 'keep';
+  if (Number(tabCount) <= 1) return 'banner';
+  return active ? 'banner' : 'close';
+}
+
+/** 创建提示：出现清除；run 抛错立刻失败；5 秒没出现算超时。 */
+export function creationHint({ appearing, failed, opening, now = Date.now(), timeout = 5000 } = {}) {
+  if (appearing) return null;
+  if (failed) return 'failed';
+  if (opening && now - Number(opening) >= timeout) return 'timeout';
+  return null;
+}
+
+/** 连续空态计数：只有成功解析出的 empty 才累加，其它状态清零。 */
+export function nextEmptyStreak(prev, kind) {
+  return kind === 'empty' ? (Number(prev) || 0) + 1 : 0;
+}
+
+/** chip 正文：只给数字或 ?；隐藏态返回空串（chip 不渲染）。 */
+export function chipLabel(state) {
+  const s = chipState(state);
+  if (s.kind === 'hidden') return '';
+  if (s.kind === 'missing' || s.kind === 'error') return '?';
+  return String(s.count);
 }
