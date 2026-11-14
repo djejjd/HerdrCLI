@@ -1,7 +1,7 @@
 // 工作台标签栏：沿用 Herdr 原生行为与已核实菜单，统一状态图标。
 import { statusIcon } from './status.js';
 import { sidebarToggle } from './controls.js';
-import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, pickApprovalsPane, chipNode, globalCount, filterVisibleTabs, ensurePlan, settlePlan, chipTarget, rowActions, decisionEvent, chipLabel } from './pending.js';
+import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, pickApprovalsPane, chipNode, globalCount, filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, rowActions, decisionEvent, chipLabel } from './pending.js';
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, props, home, exec, readTextFile, hc } from "herdr";
@@ -82,20 +82,28 @@ export default class Tabs extends View {
         // 每个 Space 只建一次；建完立刻收起，避免抢当前视图。
         if (!this.creating) {
           this.creating = true;
+          const prev = tabs.find(x => x.active)?.id ?? null;
           try {
-            run("tab.new", { name: "待批", mod: "workbench-tabs", props: { approvals: true } });
+            run("tab.new", createArgs());
           } catch {
             this.creating = false;
             return;
           }
+          // 兜底：若这个 build 仍抢了焦点，150ms 后切回创建前的标签。
+          cx.timer.after(150, () => {
+            const t = spaces().find(s => s.active)?.tabs ?? [];
+            if (prev && t.some(x => x.active && x.name === "待批")) run("tab.select", { id: prev });
+          });
           cx.timer.after(600, () => {
             this.creating = false;
-            const t = spaces().find(s => s.active)?.tabs ?? [];
+            const sp = spaces().find(s => s.active);
+            const t = sp?.tabs ?? [];
             const e = ensurePlan(t);
-            if (e.kind === "exists") {
-              const tab = t.find(x => x.id === e.tab);
-              if (tab && !tab.settled) run("tab.settle", { id: e.tab });
-            }
+            if (e.kind !== "exists") return;
+            const tab = t.find(x => x.id === e.tab);
+            if (!tab || tab.settled) return;
+            const count = countRows(rowsForSpace(this.store.state.rows ?? [], sp, spaces()));
+            if (settlePlan({ count, active: tab.active === true }) === "settle") run("tab.settle", { id: e.tab });
           });
         }
       } else {

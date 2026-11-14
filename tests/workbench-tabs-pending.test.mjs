@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
   splitRow, parseLedger, rowKey, countRows, ageText, classifyTarget, chipState, PendingStore, fixturePath, listPlan,
   ledgerSignature, pickState, rowsForSpace, pickApprovalsPane, chipNode, globalCount,
-  filterVisibleTabs, ensurePlan, settlePlan, chipTarget, rowActions, decisionEvent, chipLabel,
+  filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, rowActions, decisionEvent, chipLabel,
 } from '../mods/workbench-tabs/pending.js';
 
 const HEAD = '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |';
@@ -564,4 +564,20 @@ test('chipTarget：只找已有标签，绝不新建；连续 5 次结果稳定'
   for (let i = 0; i < 5; i += 1) assert.equal(chipTarget({ panes: [], tabs }), 'tb1');
   assert.equal(chipTarget({ panes: [], tabs: [{ id: 'm' }] }), null);
   assert.equal(chipTarget({ panes: [], tabs: [] }), null);
+});
+
+
+test('ensure 创建参数：focus:false，不抢当前视图', () => {
+  const a = createArgs();
+  assert.equal(a.focus, false);
+  assert.equal(a.name, '待批');
+  assert.equal(a.mod, 'workbench-tabs');
+  assert.deepEqual(a.props, { approvals: true });
+});
+
+test('激活中的待批标签 0 条不收起；非激活 0 条才收起', () => {
+  assert.notEqual(settlePlan({ count: 0, active: true }), 'settle');
+  assert.equal(settlePlan({ count: 0, active: true }), 'banner');
+  assert.equal(settlePlan({ count: 0, active: false }), 'settle');
+  assert.equal(settlePlan({ count: 2, active: false }), 'keep');
 });

@@ -377,3 +377,8 @@ export function chipTarget({ panes, tabs } = {}) {
   const named = (Array.isArray(tabs) ? tabs : []).find(t => t && t.name === '待批');
   return named ? named.id : null;
 }
+
+/** 新建待批标签的参数：focus:false，绝不抢当前视图。 */
+export function createArgs({ name = '待批', mod = 'workbench-tabs' } = {}) {
+  return { name, mod, props: { approvals: true }, focus: false };
+}
