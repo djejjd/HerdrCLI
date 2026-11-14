@@ -548,3 +548,14 @@ export function normalizeRow(row) {
   const s = v => (v == null ? '' : String(v));
   return { ...row, what: s(row?.what), impact: s(row?.impact), where: s(row?.where), project: s(row?.project), suggestion: s(row?.suggestion), space: s(row?.space), type: normalizeType(row?.type) };
 }
+
+/** 剔除 ring 中已不存在的 tab id，避免拿陈旧 id 去关。 */
+export function pruneRing(ring, tabs) {
+  const live = new Set((Array.isArray(tabs) ? tabs : []).map(t => t && t.id));
+  return (Array.isArray(ring) ? ring : []).filter(id => live.has(id));
+}
+
+/** 关闭前校验 id 仍在该 Space（或全局）的 tabs 里。 */
+export function canClose(id, tabs) {
+  return (Array.isArray(tabs) ? tabs : []).some(t => t && t.id === id);
+}

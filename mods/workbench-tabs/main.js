@@ -1,7 +1,7 @@
 // 工作台标签栏：沿用 Herdr 原生行为与已核实菜单，统一状态图标。
 import { statusIcon } from './status.js';
 import { sidebarToggle } from './controls.js';
-import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, chipNode, globalCount, filterVisibleTabs, ensurePlan, settlePlan, spacePlan, chipTarget, createArgs, createArgs2, legacyCreateArgs, createFailure, tabDot, readyGate, spaceSignature, markerPlan, createdRing, requestPlan, creationPlan, createLockPlan, rebuildPlan, cleanupPlan, cleanupLogLine, retryPlan, cleanupFailureLine, rowActions, decisionEvent, chipLabel } from './pending.js';
+import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, chipNode, pruneRing, canClose, globalCount, filterVisibleTabs, ensurePlan, settlePlan, spacePlan, chipTarget, createArgs, createArgs2, legacyCreateArgs, createFailure, tabDot, readyGate, spaceSignature, markerPlan, createdRing, requestPlan, creationPlan, createLockPlan, rebuildPlan, cleanupPlan, cleanupLogLine, retryPlan, cleanupFailureLine, rowActions, decisionEvent, chipLabel } from './pending.js';
 import { View, div, svg, image } from "gpui-kit";
 import * as fsPromises from "fs/promises";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
@@ -103,6 +103,24 @@ export default class Tabs extends View {
   logCleanup(spaceId, plan) {
     const line = cleanupLogLine({ spaceId, plan });
     try { fsPromises.appendFile(`${appHome()}/approvals-cleanup.log`, `${line}\n`).catch(() => {}); } catch {}
+  }
+
+  // 关闭唯一入口：先校验 id 仍存在；陈旧 id 只记日志不调用，避免 tab-close-fail toast。
+  closeTab(id, { confirmed = false } = {}) {
+    const live = spaces().some(s => canClose(id, s?.tabs ?? []));
+    if (!live) {
+      this.logCleanup(`close-skip id=${id} reason=stale`);
+      return false;
+    }
+    try {
+      run("tab.close", { id, confirmed });
+      return true;
+    } catch (error) {
+      const msg = String(error?.message ?? error).split("\n")[0].slice(0, 80);
+      this.cleanupError = `关闭失败：${msg}`;
+      this.logCleanup(cleanupFailureLine({ action: "close", id, error }));
+      return false;
+    }
   }
 
   // 唯一创建入口：不带 focus；建后 150ms 若抢了焦点就切回原标签。
@@ -291,6 +309,14 @@ export default class Tabs extends View {
         this.ensured.add(sp.id);
       }
 
+      // ring 里的陈旧 id 每轮剔除，避免重建时拿旧 id 去关。
+      let ringDirty = false;
+      for (const sp of allSpaces) {
+        const pruned = pruneRing(this.created[sp.id], sp?.tabs ?? []);
+        if (pruned.length !== (this.created[sp.id] ?? []).length) { this.created[sp.id] = pruned; ringDirty = true; }
+      }
+      if (ringDirty) localStorage.setItem("approvals.created", JSON.stringify(this.created));
+
       // 3) cleanup（历史重复；按 Space 计数）
       const plans = [];
       for (const sp of allSpaces) {
@@ -305,7 +331,7 @@ export default class Tabs extends View {
         this.logCleanup(`start space=${sp?.id} pending=${pendingIds.join(",") || "-"} keep=${plan.keep} close=${plan.close.join(",") || "-"} settle=${plan.settle.join(",") || "-"}`);
         const results = [];
         for (const id of plan.select) results.push(this.runCleanup("select", id, () => run("tab.select", { id })));
-        for (const id of plan.close) results.push(this.runCleanup("close", id, () => run("tab.close", { id, confirmed: true })));
+        for (const id of plan.close) results.push(this.runCleanup("close", id, () => this.closeTab(id, { confirmed: true })));
         for (const id of plan.settle) results.push(this.runCleanup("settle", id, () => run("tab.settle", { id })));
         this.logCleanup(`done space=${sp?.id} keep=${plan.keep} closed=${plan.close.length} settled=${plan.settle.length} failed=${results.filter(r => r === "fail").length}`);
       }
@@ -630,7 +656,7 @@ export default class Tabs extends View {
         .when(c.status === "working", el => el.child(statusIcon("working",t)))
         .when(c.status === "blocked" || c.status === "done", el => el.child(statusIcon(c.status,t)))
         .when(pending && tabDot(this.localCount), el => el.child(div().size(6).rounded(3).bg(t.blocked)))
-        .when(c.active && !pending, el => el.child(div().id(`close-${c.id}`).text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); run("tab.close", { id: c.id }); }).child(svg("mods/pane/close.svg").size(12))));
+        .when(c.active && !pending, el => el.child(div().id(`close-${c.id}`).text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); this.closeTab(c.id); }).child(svg("mods/pane/close.svg").size(12))));
     };
     const root = layout(), sidebar = find(root, "sidebar"), w = window();
     // 常驻侧栏开关：侧栏隐藏后品牌栏会一起消失，这里是唯一可见入口。
@@ -671,7 +697,7 @@ export default class Tabs extends View {
         .on_click((_e, cx) => {
           cx.stop_propagation();
           const id = this.rebuildId;
-          if (id) run("tab.close", { id, confirmed: true });
+          if (id) this.closeTab(id, { confirmed: true });
           this.paneMissing.delete(spaces().find(s => s.active)?.id);
           this.rebuildId = null;
           const ap = spaces().find(s => s.active);

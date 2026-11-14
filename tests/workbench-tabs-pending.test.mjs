@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
   splitRow, parseLedger, rowKey, countRows, ageText, classifyTarget, chipState, PendingStore, fixturePath, listPlan,
   ledgerSignature, pickState, rowsForSpace, pickApprovalsPane, chipNode, globalCount,
-  filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, cleanupPlan, cleanupLogLine, createArgs2, tabDot, readyGate, spaceSignature, markerPlan, createdRing, requestPlan, creationPlan, createLockPlan, rebuildPlan, normalizeType, normalizeRow, spacePlan, retryPlan, cleanupFailureLine, rowActions, decisionEvent, chipLabel,
+  filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, cleanupPlan, cleanupLogLine, createArgs2, tabDot, readyGate, spaceSignature, markerPlan, createdRing, requestPlan, creationPlan, createLockPlan, rebuildPlan, pruneRing, canClose, normalizeType, normalizeRow, spacePlan, retryPlan, cleanupFailureLine, rowActions, decisionEvent, chipLabel,
 } from '../mods/workbench-tabs/pending.js';
 
 const HEAD = '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |';
@@ -876,4 +876,19 @@ test('静态：approvalRow 不得对 r 字段裸 child/tooltip', () => {
   assert.equal(/\.child\(r\./.test(body), false);
   assert.equal(/\.tooltip\(r\./.test(body), false);
   assert.match(body, /String\(r\?\.type/);
+});
+
+
+test('ring 剔除陈旧 id；陈旧 id 不允许调用 close', () => {
+  const tabs = [{ id: 'tb2' }, { id: 'tb3' }];
+  assert.deepEqual(pruneRing(['tb1', 'tb2', 'tb3'], tabs), ['tb2', 'tb3']);
+  assert.deepEqual(pruneRing(null, tabs), []);
+  assert.equal(canClose('tb2', tabs), true);
+  assert.equal(canClose('tb1', tabs), false);
+});
+
+test('静态：main 里所有 tab.close 都走 closeTab 校验', () => {
+  const main = readFileSync(new URL('../mods/workbench-tabs/main.js', import.meta.url), 'utf8');
+  const direct = (main.match(/run\("tab\.close"/g) ?? []).length;
+  assert.ok(direct <= 1, '只允许 closeTab 内部出现一次 run tab.close');
 });
