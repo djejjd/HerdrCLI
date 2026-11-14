@@ -1,8 +1,9 @@
 // 工作台标签栏：沿用 Herdr 原生行为与已核实菜单，统一状态图标。
 import { statusIcon } from './status.js';
 import { sidebarToggle } from './controls.js';
-import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, pickApprovalsPane, chipNode, globalCount, filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, rowActions, decisionEvent, chipLabel } from './pending.js';
+import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, pickApprovalsPane, chipNode, globalCount, filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, rowActions, decisionEvent, chipLabel } from './pending.js';
 import { View, div, svg, image } from "gpui-kit";
+import * as fsPromises from "fs/promises";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, props, home, exec, readTextFile, hc } from "herdr";
 
@@ -38,6 +39,7 @@ export default class Tabs extends View {
     this.sent = "";
     this.decisionError = null;
     this.creating = false;
+    this.createError = null;
     if (_props?.approvals) {
       this.page = 0;
       this.store.refresh().then(() => { if (!this.store.closed) cx.notify(); }).catch(() => {});
@@ -49,6 +51,11 @@ export default class Tabs extends View {
     }
     this.timer = cx.timer.every(5000, c => this.pollApprovals(c));
     this.pollApprovals(cx);
+  }
+
+  // 只记时间/Space/错误首行，不写账本正文；写失败也不影响界面。
+  logCreateFailure(line) {
+    try { fsPromises.appendFile("/tmp/approvals-create.log", `${line}\n`).catch(() => {}); } catch {}
   }
 
   close() {
@@ -85,12 +92,17 @@ export default class Tabs extends View {
           const prev = tabs.find(x => x.active)?.id ?? null;
           try {
             run("tab.new", createArgs());
+            this.createError = null;
           } catch {
             // 老 build 会拒绝未知的 focus 参数：退回不带 focus，再靠 150ms 兜底切回原标签。
             try {
               run("tab.new", legacyCreateArgs());
-            } catch {
-              this.creating = false;
+            } catch (error) {
+              const st = createFailure({ spaceId: space?.id, error });
+              this.creating = st.creating;
+              this.createError = st.createError;
+              this.logCreateFailure(st.logLine);
+              cx.notify();
               return;
             }
           }
@@ -170,6 +182,7 @@ export default class Tabs extends View {
   }
 
   hint(s) {
+    if (this.createError) return this.createError;
     const where = this.ledgerPath();
     if (s.kind === "missing") return `账本缺失：${where}`;
     if (s.kind === "error") return `账本无法解析（${REASONS[s.reason] ?? s.reason}）：${where}`;

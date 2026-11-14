@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
   splitRow, parseLedger, rowKey, countRows, ageText, classifyTarget, chipState, PendingStore, fixturePath, listPlan,
   ledgerSignature, pickState, rowsForSpace, pickApprovalsPane, chipNode, globalCount,
-  filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, rowActions, decisionEvent, chipLabel,
+  filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, rowActions, decisionEvent, chipLabel,
 } from '../mods/workbench-tabs/pending.js';
 
 const HEAD = '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |';
@@ -589,4 +589,22 @@ test('老 build 的兜底创建参数：不带 focus 键', () => {
   assert.equal(a.name, '待批');
   assert.equal(a.mod, 'workbench-tabs');
   assert.deepEqual(a.props, { approvals: true });
+});
+
+
+test('两次创建都抛错：creating 复位、createError 非空、日志行不含正文', () => {
+  let creating = true, err = null, log = null;
+  const first = () => { throw new Error('unknown argument(s): focus'); };
+  const second = () => { throw new Error('no space yet: make one first'); };
+  try { first(); } catch {
+    try { second(); } catch (e) {
+      const st = createFailure({ spaceId: 'sp1', error: e, now: 1700000000000 });
+      creating = st.creating; err = st.createError; log = st.logLine;
+    }
+  }
+  assert.equal(creating, false);
+  assert.match(err, /^没能创建待批标签：/);
+  assert.match(log, /space=sp1/);
+  assert.match(log, /no space yet/);
+  assert.equal(log.includes('决定是否合并'), false, '日志不记账本正文');
 });

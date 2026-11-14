@@ -387,3 +387,13 @@ export function createArgs({ name = '待批', mod = 'workbench-tabs' } = {}) {
 export function legacyCreateArgs({ name = '待批', mod = 'workbench-tabs' } = {}) {
   return { name, mod, props: { approvals: true } };
 }
+
+/** 创建待批标签两次都失败时的状态：复位 creating、给出可见错误与一行诊断（不含账本正文）。 */
+export function createFailure({ spaceId, error, now = Date.now() } = {}) {
+  const msg = String(error?.message ?? error ?? 'unknown').split('\n')[0].slice(0, 80);
+  return {
+    creating: false,
+    createError: `没能创建待批标签：${msg}`,
+    logLine: `${new Date(now).toISOString()} space=${spaceId ?? '?'} error=${msg}`,
+  };
+}
