@@ -222,9 +222,10 @@ export default class Tabs extends View {
 
   approvalChip(t) {
     // 固定槽位：0 条时渲染等宽透明占位，切 Space 时标签排布不跳。
-    const slot = (child) => h_flex().id("approvals-slot").w(72).h(26).flex_none().items_center().justify_center().child(child);
+    const emptySlot = () => h_flex().id("approvals-slot").w(72).h(26).flex_none().items_center().justify_center();
+    const slot = (child) => emptySlot().child(child);
     const s = chipState(this.localApprovals());
-    if (s.kind === "hidden") return slot(null);
+    if (s.kind === "hidden") return emptySlot();
     const bad = s.kind === "missing" || s.kind === "error";
     return slot(h_flex().id("approvals-chip").h(26).px(7).gap(5).flex_none().items_center().rounded(6)
       .bg(t.hover).text_color(bad ? t.dim : t.blocked).cursor_pointer()

@@ -589,3 +589,24 @@ test('关闭判定按 Space 隔离：A 实例不得碰 B 的标签，B 只关自
   // 两 Space 各自有标签时互不影响：A 的判定只看 A 的 tabs
   assert.equal(closePlan({ kind: 'count', active: false, tabCount: tabsA.length, emptyStreak: 0 }), 'keep');
 });
+
+
+test('静态检查：main.js 不得把 null 传给 child/slot（渲染期空子元素会抛错）', () => {
+  const main = readFileSync(new URL('../mods/workbench-tabs/main.js', import.meta.url), 'utf8');
+  assert.equal(/\.child\(\s*null\s*\)/.test(main), false, '不要 .child(null)');
+  assert.equal(/\.children\(\s*null\s*\)/.test(main), false, '不要 .children(null)');
+  assert.equal(/slot\(\s*null\s*\)/.test(main), false, '空槽位用 emptySlot()，不要 slot(null)');
+});
+
+test('三种 Space 分支：未知按全局、别的现存 Space 隐藏、空 Space 只看全局', () => {
+  const known = [{ id: 'sp1', name: 'AIAgentCLI' }];
+  const rows = [{ what: '全局行', space: '' }, { what: 'A 的行', space: 'AIAgentCLI' }];
+  // 账本里的 Space 匹配不到现存 Space（改名/删除）→ 按全局，任何 Space 都看得到
+  const ghost = { what: '旧名行', space: 'OldName' };
+  assert.equal(countRows(rowsForSpace([...rows, ghost], { name: 'testBot' }, known)), 2);
+  // 明确属于别的现存 Space（AIAgentCLI）→ 只剩全局
+  assert.equal(countRows(rowsForSpace(rows, { name: 'testBot' }, known)), 1);
+  // 空 Space（无终端、无名字）→ 只剩全局；没有全局就是 0
+  assert.equal(countRows(rowsForSpace(rows, { id: 'spNew', name: '' }, known)), 1);
+  assert.equal(countRows(rowsForSpace([{ what: 'A 的行', space: 'AIAgentCLI' }], { id: 'spNew', name: '' }, known)), 0);
+});
