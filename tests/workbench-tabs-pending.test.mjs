@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   splitRow, parseLedger, rowKey, countRows, ageText, classifyTarget, chipState, PendingStore, fixturePath, listPlan,
-  nextEmptyStreak, closePlan, navPlan, ledgerSignature, pickState, closeFocusPlan, creationHint, rowsForSpace,
+  nextEmptyStreak, closePlan, navPlan, ledgerSignature, pickState, closeFocusPlan, creationHint, rowsForSpace, pickApprovalsPane,
 } from '../mods/workbench-tabs/pending.js';
 
 const HEAD = '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |';
@@ -500,25 +500,47 @@ test('Space 列：解析到每条上；缺列时全部按全局', () => {
   assert.equal(noSpace.rows[0].space, '', '缺 Space 列 = 全局');
 });
 
-test('rowsForSpace：全局都显示，本 Space 只显示自己的，别的 Space 不显示', () => {
+test('rowsForSpace：全局都显示，本 Space 只显示自己的，别的现存 Space 不显示', () => {
   const rows = [
     { what: '全局', space: '' },
     { what: 'A 的', space: 'AIAgentCLI' },
     { what: 'B 的', space: 'AIBot' },
     { what: '按 id', space: 'sp123' },
   ];
-  const a = rowsForSpace(rows, { id: 'sp999', name: 'AIAgentCLI' });
+  const known = [{ id: 'sp999', name: 'AIAgentCLI' }, { id: 'sp123', name: 'AIBot' }, { id: 'spX', name: 'AICourse' }];
+  const a = rowsForSpace(rows, { id: 'sp999', name: 'AIAgentCLI' }, known);
   assert.deepEqual(a.map(r => r.what), ['全局', 'A 的']);
-  const b = rowsForSpace(rows, { id: 'sp123', name: 'AIBot' });
+  const b = rowsForSpace(rows, { id: 'sp123', name: 'AIBot' }, known);
   assert.deepEqual(b.map(r => r.what), ['全局', 'B 的', '按 id']);
-  assert.deepEqual(rowsForSpace(rows, { id: 'x', name: '空 Space' }).map(r => r.what), ['全局']);
-  assert.deepEqual(rowsForSpace([], { name: 'A' }), []);
-  assert.deepEqual(rowsForSpace(null, { name: 'A' }), []);
+  // 新建的空 Space：没有自己的行，只剩全局
+  assert.deepEqual(rowsForSpace(rows, { id: 'spNew', name: 'testBot' }, known).map(r => r.what), ['全局']);
+  assert.deepEqual(rowsForSpace([], { name: 'A' }, known), []);
+  assert.deepEqual(rowsForSpace(null, { name: 'A' }, known), []);
+});
+
+test('rowsForSpace：Space 改名/删除导致匹配不到时按全局处理，不静默隐藏', () => {
+  // 账本里写着旧名 OldName，但现在只剩 Renamed（改名）或已删除
+  const rows = [{ what: '旧 Space 的', space: 'OldName' }];
+  const known = [{ id: 'sp1', name: 'Renamed' }];
+  assert.deepEqual(rowsForSpace(rows, { id: 'sp1', name: 'Renamed' }, known).map(r => r.what), ['旧 Space 的']);
+  // 账本里写的是未知名字，任何 Space 都应看到（安全侧）
+  assert.deepEqual(rowsForSpace([{ what: 'x', space: 'ghost' }], { name: 'testBot' }, known).map(r => r.what), ['x']);
+  // 明确属于另一个现存 Space 的仍然隐藏
+  assert.deepEqual(rowsForSpace([{ what: 'y', space: 'Renamed' }], { id: 'sp2', name: 'testBot' }, known), []);
+});
+
+test('新 Space 零配置：只有全局行就显示全局，没有全局就是 0', () => {
+  const known = [{ id: 'sp1', name: 'AIAgentCLI' }];
+  const globalRows = [{ what: '全局', space: '' }, { what: '别人的', space: 'AIAgentCLI' }];
+  const fresh = { id: 'spNew', name: 'testBot' };
+  assert.equal(countRows(rowsForSpace(globalRows, fresh, known)), 1, '新 Space 看到全局');
+  assert.equal(countRows(rowsForSpace([{ what: '别人的', space: 'AIAgentCLI' }], fresh, known)), 0, '无全局则不显示');
 });
 
 test('本 Space 计数为 0 时 chip 隐藏（全局为 0 也一样）', () => {
   const rows = [{ what: '别的 space', space: 'AIBot' }];
-  const mine = rowsForSpace(rows, { name: 'AIAgentCLI' });
+  const known = [{ id: 'sp2', name: 'AIBot' }];
+  const mine = rowsForSpace(rows, { name: 'AIAgentCLI' }, known);
   assert.equal(countRows(mine), 0);
   assert.equal(chipState({ kind: 'count', count: countRows(mine) }).kind, 'hidden');
 });
@@ -548,4 +570,22 @@ test('外部关闭（Cmd+W）后状态清理，再开不复用陈旧标签', () 
   tracked = null; restoreTo = null;
   // 再点：不得拿陈旧 tracked 去 open
   assert.equal(navPlan({ panes: [], tabs: tabsAfter, tracked, opening: 0, now: 2000 }).kind, 'create');
+});
+
+
+test('关闭判定按 Space 隔离：A 实例不得碰 B 的标签，B 只关自己的', () => {
+  const panes = [
+    { pane: 'pA', tab: 'tbA', mod: 'workbench-tabs' },
+    { pane: 'pB', tab: 'tbB', mod: 'workbench-tabs' },
+  ];
+  const tabsA = [{ id: 'tbA' }, { id: 'tbMainA' }];
+  const tabsB = [{ id: 'tbB' }, { id: 'tbMainB' }];
+  assert.equal(pickApprovalsPane(panes, tabsA).pane, 'pA');
+  assert.equal(pickApprovalsPane(panes, tabsB).pane, 'pB');
+  // 当前 Space 的 tabs 里没有 B 的标签时，B 的面板不参与
+  assert.equal(pickApprovalsPane([panes[1]], tabsA), null);
+  // B 在 0 条且非当前、标签数>1 时关闭自己
+  assert.equal(closePlan({ kind: 'empty', active: false, tabCount: tabsB.length, emptyStreak: 2 }), 'close');
+  // 两 Space 各自有标签时互不影响：A 的判定只看 A 的 tabs
+  assert.equal(closePlan({ kind: 'count', active: false, tabCount: tabsA.length, emptyStreak: 0 }), 'keep');
 });

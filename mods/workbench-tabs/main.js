@@ -1,7 +1,7 @@
 // 工作台标签栏：沿用 Herdr 原生行为与已核实菜单，统一状态图标。
 import { statusIcon } from './status.js';
 import { sidebarToggle } from './controls.js';
-import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, nextEmptyStreak, closePlan, navPlan, ledgerSignature, pickState, closeFocusPlan, creationHint, rowsForSpace, countRows } from './pending.js';
+import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, nextEmptyStreak, closePlan, navPlan, ledgerSignature, pickState, closeFocusPlan, creationHint, rowsForSpace, countRows, pickApprovalsPane } from './pending.js';
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, props, home, exec, readTextFile } from "herdr";
@@ -158,10 +158,11 @@ export default class Tabs extends View {
   // 自动关闭：只由轮询调用（不在 render 里），且只在非当前、同空间标签数 >1、连续两次连续空态时关。
   maybeCloseApprovals(state) {
     if (props()?.approvals) return;
-    const pane = panes().find(p => p && p.mod === "workbench-tabs");
-    if (!pane) return;
-    const space = spaces().find(s => (s.tabs ?? []).some(t => t.id === pane.tab));
+    // 只处理“当前实例所属 Space”的标签；别的 Space 的待批标签由它自己的 tab bar 关闭。
+    const space = spaces().find(s => s.active);
     const tabs = space?.tabs ?? [];
+    const pane = pickApprovalsPane(panes(), tabs);
+    if (!pane) return;
     const active = tabs.find(t => t.active)?.id === pane.tab;
     const plan = closePlan({ kind: state.kind, active, tabCount: tabs.length, emptyStreak: this.emptyStreak });
     if (plan !== "close" || this.closedTab === pane.tab) return;
@@ -214,7 +215,7 @@ export default class Tabs extends View {
   localApprovals() {
     const state = this.store?.state;
     if (!state || state.kind !== "count") return state ?? { kind: "hidden" };
-    const rows = rowsForSpace(state.rows ?? [], spaces().find(s => s.active));
+    const rows = rowsForSpace(state.rows ?? [], spaces().find(s => s.active), spaces());
     const count = countRows(rows);
     return count > 0 ? { kind: "count", count, rows } : { kind: "hidden" };
   }
@@ -327,8 +328,7 @@ export default class Tabs extends View {
     }
     // 全部处理完：不再列条目，只给“已全部处理”与去留说明；自动关闭由轮询按规则做。
     if (state.kind === "empty") {
-      const pane = panes().find(p => p && p.mod === "workbench-tabs");
-      const space = spaces().find(s => (s.tabs ?? []).some(t => t.id === pane?.tab));
+      const space = spaces().find(s => s.active);
       const tabs = space?.tabs ?? [];
       const hint = tabs.length <= 1 ? "本空间仅此标签，可手动关闭" : "切到其他标签后会自动关闭";
       return v_flex().w_full().p(10).gap(6)
@@ -339,8 +339,9 @@ export default class Tabs extends View {
         .child(div().p(10).text_size(12).text_color(t.muted).child(hint))
         .child(div().text_size(10.5).text_color(t.dim).px(2).truncate().tooltip(path).child(path));
     }
-    // 只看当前 Space 可见的行（全局 + 本 Space），已完成是终态不参与。
-    const rows = rowsForSpace(state.rows ?? [], spaces().find(s => s.active)).filter(r => !r.done);
+    // 只看当前 Space 可见的行（全局 + 本 Space）；已完成是终态不参与。
+    const current = spaces().find(s => s.active);
+    const rows = rowsForSpace(state.rows ?? [], current, spaces()).filter(r => !r.done);
     const plan = listPlan(rows, this.page ?? 0, PAGE);
     const head = h_flex().gap(6).items_center().px(2)
       .child(div().text_size(13).font_semibold().child(rows.length ? `待你批准 ${rows.length} 条` : "待你批准"))

@@ -307,14 +307,28 @@ export function creationHint({ appearing, failed, opening, now = Date.now(), tim
   return null;
 }
 
-/** 当前 Space 可见的待批行：全局（空格子）恒显示，其余按 Space 名或 id 精确匹配。 */
-export function rowsForSpace(rows, space) {
+/** 当前 Space 可见的待批行：全局（空格子）恒显示；本 Space 精确匹配；
+ *  明确属于别的现存 Space 才隐藏；匹配不到（改名/删除/未登记）按全局处理，绝不静默隐藏。 */
+export function rowsForSpace(rows, space, knownSpaces = []) {
   const list = Array.isArray(rows) ? rows : [];
   const name = typeof space?.name === 'string' ? space.name.trim() : '';
   const id = typeof space?.id === 'string' ? space.id.trim() : '';
+  const known = new Set();
+  for (const s of Array.isArray(knownSpaces) ? knownSpaces : []) {
+    if (typeof s?.name === 'string' && s.name.trim()) known.add(s.name.trim());
+    if (typeof s?.id === 'string' && s.id.trim()) known.add(s.id.trim());
+  }
   return list.filter((r) => {
     const at = String(r?.space ?? '').trim();
     if (!at) return true;
-    return (name && at === name) || (id && at === id);
+    if ((name && at === name) || (id && at === id)) return true;
+    if (known.has(at)) return false;
+    return true;
   });
+}
+
+/** 某个 Space 的待批面板（mod pane）：只认该 Space 的 tab，避免跨 Space 误伤。 */
+export function pickApprovalsPane(panes, tabs, mod = 'workbench-tabs') {
+  const ids = new Set((Array.isArray(tabs) ? tabs : []).map(t => t && t.id));
+  return (Array.isArray(panes) ? panes : []).find(p => p && p.mod === mod && ids.has(p.tab)) ?? null;
 }
