@@ -1,7 +1,7 @@
 // 工作台标签栏：沿用 Herdr 原生行为与已核实菜单，统一状态图标。
 import { statusIcon } from './status.js';
 import { sidebarToggle } from './controls.js';
-import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, pickApprovalsPane, chipNode, globalCount, filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, rowActions, decisionEvent, chipLabel } from './pending.js';
+import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, pickApprovalsPane, chipNode, globalCount, filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, rowActions, decisionEvent, chipLabel } from './pending.js';
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, props, home, exec, readTextFile, hc } from "herdr";
@@ -86,8 +86,13 @@ export default class Tabs extends View {
           try {
             run("tab.new", createArgs());
           } catch {
-            this.creating = false;
-            return;
+            // 老 build 会拒绝未知的 focus 参数：退回不带 focus，再靠 150ms 兜底切回原标签。
+            try {
+              run("tab.new", legacyCreateArgs());
+            } catch {
+              this.creating = false;
+              return;
+            }
           }
           // 兜底：若这个 build 仍抢了焦点，150ms 后切回创建前的标签。
           cx.timer.after(150, () => {

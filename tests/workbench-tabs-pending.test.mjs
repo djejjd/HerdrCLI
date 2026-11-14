@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
   splitRow, parseLedger, rowKey, countRows, ageText, classifyTarget, chipState, PendingStore, fixturePath, listPlan,
   ledgerSignature, pickState, rowsForSpace, pickApprovalsPane, chipNode, globalCount,
-  filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, rowActions, decisionEvent, chipLabel,
+  filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, rowActions, decisionEvent, chipLabel,
 } from '../mods/workbench-tabs/pending.js';
 
 const HEAD = '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |';
@@ -580,4 +580,13 @@ test('激活中的待批标签 0 条不收起；非激活 0 条才收起', () =>
   assert.equal(settlePlan({ count: 0, active: true }), 'banner');
   assert.equal(settlePlan({ count: 0, active: false }), 'settle');
   assert.equal(settlePlan({ count: 2, active: false }), 'keep');
+});
+
+
+test('老 build 的兜底创建参数：不带 focus 键', () => {
+  const a = legacyCreateArgs();
+  assert.equal('focus' in a, false);
+  assert.equal(a.name, '待批');
+  assert.equal(a.mod, 'workbench-tabs');
+  assert.deepEqual(a.props, { approvals: true });
 });

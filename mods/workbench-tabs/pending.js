@@ -382,3 +382,8 @@ export function chipTarget({ panes, tabs } = {}) {
 export function createArgs({ name = '待批', mod = 'workbench-tabs' } = {}) {
   return { name, mod, props: { approvals: true }, focus: false };
 }
+
+/** 老 build 不认识 focus 参数时的兜底：不带 focus，由调用方把焦点切回来。 */
+export function legacyCreateArgs({ name = '待批', mod = 'workbench-tabs' } = {}) {
+  return { name, mod, props: { approvals: true } };
+}
