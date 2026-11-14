@@ -1,9 +1,13 @@
-状态: active
+状态: superseded（已上卷为 ~/ai/collab.md，跨项目通用）
 创建: 2026-11-14
 最后更新: 2026-11-14
-关联: ~/ai/rules.md §6（A-01~A-08）; docs/rules.md; docs/plans/README.md
+关联: ~/ai/collab.md; ~/ai/rules.md §6（A-01~A-12）; docs/rules.md; docs/plans/README.md
 
 # 0003 多 Agent 协作规范
+
+> **已上卷**：本规范的通用部分已提升为跨项目源文件 `~/ai/collab.md`，
+> 纪律条款写入 `~/ai/rules.md` §6（A-09~A-12）。本文件保留作为项目侧历史记录，
+> 不再新增内容；项目特有约束仍见 `docs/rules.md`。
 
 本文件是本项目多 Agent 协作的操作层规范：把全局 §6 的交接纪律（A-01~A-08）
 落到可执行的方法上。通用红线仍在 `~/ai/rules.md` §1，不在此重复。
