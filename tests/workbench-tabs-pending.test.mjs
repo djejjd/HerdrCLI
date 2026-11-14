@@ -1,4 +1,5 @@
 // 待批 chip 的纯逻辑与异步生命周期：账本解析、计数口径、时长计算、目标安全、读取失败与关闭。
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -520,4 +521,31 @@ test('本 Space 计数为 0 时 chip 隐藏（全局为 0 也一样）', () => {
   const mine = rowsForSpace(rows, { name: 'AIAgentCLI' });
   assert.equal(countRows(mine), 0);
   assert.equal(chipState({ kind: 'count', count: countRows(mine) }).kind, 'hidden');
+});
+
+
+test('静态检查：main.js 用到的 pending 导出必须都在 import 里', () => {
+  const main = readFileSync(new URL('../mods/workbench-tabs/main.js', import.meta.url), 'utf8');
+  const pend = readFileSync(new URL('../mods/workbench-tabs/pending.js', import.meta.url), 'utf8');
+  const line = main.match(/import \{([^}]+)\} from '\.\/pending\.js'/);
+  assert.ok(line, 'main.js 应有 pending.js 的 import');
+  const imported = line[1].split(',').map(s => s.trim()).filter(Boolean);
+  const exported = [...pend.matchAll(/export (?:function|class|const) (\w+)/g)].map(m => m[1]);
+  const used = exported.filter(name => new RegExp(`\\b${name}\\b`).test(main));
+  const missing = used.filter(name => !imported.includes(name));
+  assert.deepEqual(missing, [], `有导出被引用但没 import：${missing.join(', ')}`);
+});
+
+test('外部关闭（Cmd+W）后状态清理，再开不复用陈旧标签', () => {
+  const tabsOpen = [{ id: 'main' }, { id: 'tb2' }];
+  const panes = [{ pane: 'p2', tab: 'tb2', mod: 'workbench-tabs' }];
+  let tracked = 'tb2';
+  let restoreTo = 'main';
+  assert.equal(navPlan({ panes, tabs: tabsOpen, tracked, opening: 0, now: 1000 }).kind, 'open');
+  // 外部关闭：模型里标签与面板都没了，本地 tracked 还没来得及清
+  const tabsAfter = [{ id: 'main' }];
+  assert.equal(closeFocusPlan({ closing: tracked, prev: restoreTo, tabs: tabsAfter }), 'main', '焦点回到原会话');
+  tracked = null; restoreTo = null;
+  // 再点：不得拿陈旧 tracked 去 open
+  assert.equal(navPlan({ panes: [], tabs: tabsAfter, tracked, opening: 0, now: 2000 }).kind, 'create');
 });
