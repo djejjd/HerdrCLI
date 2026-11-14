@@ -107,6 +107,17 @@ export function countRows(rows, _acks) {
   return Array.isArray(rows) ? rows.filter(r => r && !r.done).length : 0;
 }
 
+/** 弹层分页：每页 pageSize 条，页码越界夹取；顺序保持账本行序。 */
+export function listPlan(rows, page = 0, pageSize = 6) {
+  const all = Array.isArray(rows) ? rows : [];
+  const size = Math.max(1, Math.floor(pageSize));
+  const pages = Math.max(1, Math.ceil(all.length / size));
+  const at = Math.min(Math.max(0, Math.floor(page)), pages - 1);
+  const start = at * size;
+  const shown = all.slice(start, start + size);
+  return { shown, page: at, pages, start, end: start + shown.length, more: all.length - start - shown.length };
+}
+
 /** chip 的显示状态：0 行隐藏；账本缺失与读取/解析失败都要露出“待批 ?”，不静默。 */
 export function chipState(state) {
   if (!state || state.kind === 'hidden') return { kind: 'hidden' };

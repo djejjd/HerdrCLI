@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  splitRow, parseLedger, rowKey, countRows, ageText, classifyTarget, chipState, PendingStore, fixturePath,
+  splitRow, parseLedger, rowKey, countRows, ageText, classifyTarget, chipState, PendingStore, fixturePath, listPlan,
 } from '../mods/workbench-tabs/pending.js';
 
 const HEAD = '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |';
@@ -191,4 +191,72 @@ test('解析失败后恢复为计数，状态可回落', async () => {
   assert.equal((await store.refresh()).kind, 'count');
   text = led();
   assert.equal((await store.refresh()).kind, 'hidden');
+});
+
+
+const rowAt = i => ({ what: `第${i}条`, where: '', proposedAt: T, done: false });
+const rowsN = n => Array.from({ length: n }, (_, i) => rowAt(i + 1));
+
+test('分页：0/1 行都在单页，不出现翻页', () => {
+  for (const n of [0, 1]) {
+    const p = listPlan(rowsN(n), 0, 6);
+    assert.equal(p.pages, 1);
+    assert.equal(p.page, 0);
+    assert.equal(p.shown.length, n);
+    assert.equal(p.more, 0);
+  }
+});
+
+test('分页：7 行时分两页，跨页顺序与末页条数正确', () => {
+  const rows = rowsN(7);
+  const first = listPlan(rows, 0, 6);
+  assert.equal(first.pages, 2);
+  assert.equal(first.shown.length, 6);
+  assert.equal(first.more, 1);
+  const second = listPlan(rows, 1, 6);
+  assert.equal(second.shown.length, 1);
+  assert.equal(second.shown[0].what, '第7条');
+  assert.equal(second.more, 0);
+  // 顺序不因翻页改变
+  assert.deepEqual(listPlan(rows, 1, 6).shown[0], rows[6]);
+});
+
+test('分页：200 行 34 页，末页 2 条', () => {
+  const rows = rowsN(200);
+  const last = listPlan(rows, 33, 6);
+  assert.equal(last.pages, 34);
+  assert.equal(last.shown.length, 2);
+  assert.equal(last.shown[0].what, '第199条');
+  assert.equal(last.shown[1].what, '第200条');
+  assert.equal(listPlan(rows, 0, 6).shown[0].what, '第1条');
+});
+
+test('分页：页码越界与行数骤减都夹取，不停在空页', () => {
+  const rows = rowsN(200);
+  assert.equal(listPlan(rows, 99, 6).page, 33);
+  assert.equal(listPlan(rows, -3, 6).page, 0);
+  const shrunk = rowsN(7);
+  const p = listPlan(shrunk, 33, 6);
+  assert.equal(p.page, 1);
+  assert.equal(p.shown.length, 1);
+});
+
+test('分页：任何页的计数都不变，已读也不改变条数', () => {
+  const rows = rowsN(200);
+  const acks = { [rowKey(rows[0])]: 1 };
+  for (const page of [0, 1, 33]) {
+    const plan = listPlan(rows, page, 6);
+    assert.equal(countRows(rows), 200);
+    assert.equal(countRows(rows, acks), 200);
+    assert.equal(plan.pages, 34);
+  }
+});
+
+test('分页：已完成行不进入列表，页数按未处理行算', () => {
+  const rows = [...rowsN(6), { ...rowAt(7), done: true }];
+  const pending = rows.filter(r => !r.done);
+  const plan = listPlan(pending, 0, 6);
+  assert.equal(plan.shown.length, 6);
+  assert.equal(plan.pages, 1);
+  assert.equal(plan.more, 0);
 });

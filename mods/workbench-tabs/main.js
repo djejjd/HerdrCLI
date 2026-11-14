@@ -1,11 +1,12 @@
 // 工作台标签栏：沿用 Herdr 原生行为与已核实菜单，统一状态图标。
 import { statusIcon } from './status.js';
 import { sidebarToggle } from './controls.js';
-import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath } from './pending.js';
+import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan } from './pending.js';
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings, props, home, exec, readTextFile } from "herdr";
 
+const PAGE = 6;
 const REASONS = { "no-header": "没有表格表头", "no-what": "缺「要你做什么」列", "no-status": "缺「状态」列", unreadable: "内容不是文本" };
 
 function loadAcks() {
@@ -34,6 +35,7 @@ export default class Tabs extends View {
     this.sig = "";
     this.lastPoll = 0;
     this.store = new PendingStore({ read: async () => readTextFile(this.ledgerPath()) });
+    if (_props?.approvals) this.page = 0;
     // 列表弹层只读一次，不另起轮询；常驻 chip 才需要定时刷新。
     if (!_props?.approvals) this.timer = cx.timer.every(5000, c => this.pollApprovals(c));
     this.pollApprovals(cx);
@@ -108,7 +110,7 @@ export default class Tabs extends View {
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click((_e, cx) => {
         cx.stop_propagation();
-        openOverlay({ mod: "workbench-tabs", kind: "popup", width: 380, height: 380, props: { approvals: true } });
+        openOverlay({ mod: "workbench-tabs", kind: "popup", width: 380, props: { approvals: true } });
       })
       .child(statusIcon(bad ? "idle" : "blocked", t))
       .child(div().text_size(12).font_medium().child(bad ? "待批 ?" : `待批 ${s.count}`));
@@ -133,30 +135,6 @@ export default class Tabs extends View {
           .on_click((_e, cx) => { cx.stop_propagation(); this.openTarget(r.where); })
           .child(div().text_size(11).text_color(t.muted).child("打开"))))
       .when(Boolean(r.where) && !target, el => el.child(div().text_size(11).text_color(t.dim).truncate().child(r.where))));
-  }
-
-  approvalsPanel(t) {
-    const state = this.store?.state ?? { kind: "hidden" };
-    const rows = state.rows ?? [];
-    const path = this.ledgerPath();
-    const head = h_flex().gap(6).items_center().px(2)
-      .child(div().text_size(13).font_semibold().child(rows.length ? `待你批准 ${rows.length} 条` : "待你批准"))
-      .child(div().flex_1())
-      .child(div().text_size(11).text_color(t.dim).child("只读"));
-    const empty = state.kind === "missing"
-      ? [div().text_size(12).text_color(t.muted).child("账本不存在"), div().text_size(11).text_color(t.dim).truncate().child(path), div().text_size(11).text_color(t.dim).child("监督方创建账本后，这里会列出待批条目。")]
-      : state.kind === "error"
-        ? [div().text_size(12).text_color(t.muted).child(`账本无法解析：${REASONS[state.reason] ?? state.reason}`), div().text_size(11).text_color(t.dim).truncate().child(path)]
-        : [div().text_size(12).text_color(t.muted).child("没有待批条目")];
-    const body = rows.length ? rows.map(r => this.approvalRow(r, t)) : [v_flex().p(10).gap(4).children(empty)];
-    return v_flex().size_full().p(10).gap(6)
-      .child(head)
-      .child(v_flex().flex_1().min_h(0).gap(2).overflow_y_scrollbar().children(body))
-      .child(h_flex().gap(6).items_center().px(2)
-        .child(div().flex_1().min_w(0).truncate().text_size(10.5).text_color(t.dim).tooltip(path).child(path))
-        .child(h_flex().h(20).px(6).items_center().rounded(5).cursor_pointer().bg(t.hover)
-          .on_click((_e, cx) => { cx.stop_propagation(); this.openTarget(path); })
-          .child(div().text_size(11).text_color(t.muted).child("在编辑器打开"))));
   }
 
   // The side panel is remembered per space: switching shows that space's choice
@@ -185,6 +163,43 @@ export default class Tabs extends View {
     if (this.panels[space.id] === now) return;
     this.panels[space.id] = now;
     localStorage.setItem("panels", JSON.stringify(this.panels));
+  }
+
+  pageButton(label, enabled, t, act) {
+    return h_flex().h(22).px(8).items_center().rounded(5).flex_none()
+      .when(enabled, el => el.cursor_pointer().bg(t.hover).on_click((_e, cx) => { cx.stop_propagation(); act(); cx.notify(); }))
+      .child(div().text_size(11).text_color(enabled ? t.foreground : t.dim).child(label));
+  }
+
+  approvalsPanel(t) {
+    const state = this.store?.state ?? { kind: "hidden" };
+    // 已完成是终态：不进入列表，也不参与页数。
+    const rows = (state.rows ?? []).filter(r => !r.done);
+    const path = this.ledgerPath();
+    const plan = listPlan(rows, this.page ?? 0, PAGE);
+    const head = h_flex().gap(6).items_center().px(2)
+      .child(div().text_size(13).font_semibold().child(rows.length ? `待你批准 ${rows.length} 条` : "待你批准"))
+      .child(div().flex_1())
+      .child(div().text_size(11).text_color(t.dim).child("只读"));
+    const empty = state.kind === "missing"
+      ? [div().text_size(12).text_color(t.muted).child("账本不存在"), div().text_size(11).text_color(t.dim).truncate().child(path), div().text_size(11).text_color(t.dim).child("监督方创建账本后，这里会列出待批条目。")]
+      : state.kind === "error"
+        ? [div().text_size(12).text_color(t.muted).child(`账本无法解析：${REASONS[state.reason] ?? state.reason}`), div().text_size(11).text_color(t.dim).truncate().child(path)]
+        : [div().text_size(12).text_color(t.muted).child("没有待批条目")];
+    const body = plan.shown.length ? plan.shown.map(r => this.approvalRow(r, t)) : [v_flex().p(10).gap(4).children(empty)];
+    // 弹层是 fit-content：这里按内容长高，不用 size_full / flex_1 / 滚动容器。
+    return v_flex().w_full().gap(6).p(10)
+      .child(head)
+      .children(body)
+      .when(plan.pages > 1, el => el.child(h_flex().gap(6).items_center().px(2)
+        .child(this.pageButton("上一页", plan.page > 0, t, () => { this.page = plan.page - 1; }))
+        .child(div().flex_1().text_size(11).text_color(t.muted).child(`第 ${plan.page + 1}/${plan.pages} 页 · 共 ${rows.length} 条`))
+        .child(this.pageButton("下一页", plan.page < plan.pages - 1, t, () => { this.page = plan.page + 1; }))))
+      .child(h_flex().gap(6).items_center().px(2)
+        .child(div().flex_1().min_w(0).truncate().text_size(10.5).text_color(t.dim).tooltip(path).child(path))
+        .child(h_flex().h(20).px(6).items_center().rounded(5).cursor_pointer().bg(t.hover)
+          .on_click((_e, cx) => { cx.stop_propagation(); this.openTarget(path); })
+          .child(div().text_size(11).text_color(t.muted).child("在编辑器打开"))));
   }
 
   render() {
