@@ -519,7 +519,7 @@ export default class Workbench extends View {
         // 图标上移半行，中心对齐两行文本的第一行；状态/编辑笔仍保持行内居中。
         .child(div().mt(-9).child(icon?(agent.program.tint?svg(icon).size(16).text_color(t.muted):image(icon).size(16)):div())))
       .child(v_flex().flex_1().min_w(0).gap(2)
-        .child(div().text_size(10.5).text_color(t.muted).child(agent.program?.name??'Agent'))
+        .child(div().text_size(11).text_color(t.muted).child(agent.program?.name??'Agent'))
         .child(div().text_size(12.5).font_medium().text_color(t.foreground).child(name)))
       .child(h_flex().id(`rename-${agent.address}`).w(16).h(16).items_center().justify_center().text_color(t.dim).opacity(hovered?1:0)
         .tooltip('修改任务名')
@@ -535,7 +535,7 @@ export default class Workbench extends View {
       .on_click(()=>run('pane.focus',{terminal:terminal.address}))
       .child(svg('icons/shell.svg').size(12).text_color(t.dim))
       .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(t.muted).child(name))
-      .when(dup.has(name),e=>e.child(div().flex_none().text_size(10).text_color(t.dim).child(terminal.address)));
+      .when(dup.has(name),e=>e.child(div().flex_none().text_size(11).text_color(t.dim).child(terminal.address)));
   }
   subRow(terminal,list,all,spaceId,index) {
     const t=theme(), labels=all.find(x=>x.address===terminal.address)?.labels??{};
@@ -561,8 +561,8 @@ export default class Workbench extends View {
         .when(bg.icon,e=>e.child(div().mt(-9).child(bg.tint?svg(bg.icon).size(16).text_color(t.muted):image(bg.icon).size(16)))))
       .child(v_flex().flex_1().min_w(0).gap(2)
         .child(h_flex().gap(4).items_center()
-          .child(div().text_size(10.5).text_color(t.muted).truncate().child(bg.program))
-          .child(div().text_size(9.5).text_color(t.dim).child('· 后台')))
+          .child(div().text_size(11).text_color(t.muted).truncate().child(bg.program))
+          .child(div().text_size(11).text_color(t.dim).child('· 后台')))
         .child(div().text_size(12.5).font_medium().text_color(t.foreground).child(bg.name)))
       .child(h_flex().id(`rename-${terminal.address}`).w(16).h(16).items_center().justify_center().text_color(t.dim).opacity(hovered?1:0)
         .tooltip('修改任务名')
@@ -595,12 +595,12 @@ export default class Workbench extends View {
         cx.notify();
       })
       .child(chevron(foldedTerm,t))
-      .child(div().text_size(10.5).text_color(t.dim).child(sec.title))
+      .child(div().text_size(11).text_color(t.dim).child(sec.title))
       .child(div().flex_1())
-      .child(div().text_size(10).text_color(t.dim).child(String(sec.count)))]
+      .child(div().text_size(11).text_color(t.dim).child(String(sec.count)))]
       .concat(win.shown.map((x,i)=>this.termRow(x,termTop+TERM_HEAD+i*TERM_ROW,dup,t)))
       .concat(win.more?[h_flex().id(`term-more-${space.id}`).absolute().left(26).right(2).top(termTop+TERM_HEAD+win.shown.length*TERM_ROW).h(TERM_MORE)
-        .items_center().cursor_pointer().text_size(10.5).text_color(t.accent)
+        .items_center().cursor_pointer().text_size(11).text_color(t.accent)
         .on_click((_e,cx)=>{this.termExpanded.add(space.id);cx.notify();})
         .child(div().child('还有 '+win.more+' 条'))]:[]):[];
     const folded=this.folded.has(space.id), active=space.active, hint=spaceHint(list.length);
@@ -614,8 +614,8 @@ export default class Workbench extends View {
             .child(chevron(folded,t)))
           .child(h_flex().id(`select-${space.id}`).flex_1().min_w(0).h(24).items_center().gap(6).cursor_pointer()
             .on_click(()=>run('space.select',spaceSelectArgs(space)))
-            .child(div().min_w(0).truncate().text_size(11.5).font_semibold().text_color(active?t.foreground:t.muted).child(space.name))
-            .when(count,e=>e.child(statusIcon('blocked',t)).child(div().text_size(10.5).text_color(t.muted).child(String(count)))))
+            .child(div().min_w(0).truncate().text_size(12).font_semibold().text_color(active?t.foreground:t.muted).child(space.name))
+            .when(count,e=>e.child(statusIcon('blocked',t)).child(div().text_size(11).text_color(t.muted).child(String(count)))))
           .child(h_flex().id(`space-menu-${space.id}`).w(16).h(24).flex_none().items_center().justify_center()
             .text_color(t.dim).opacity(this.hoverSpace===space.id?1:0)
             .on_hover((on,cx)=>{this.hoverSpace=on?space.id:null;cx.notify();})
@@ -626,14 +626,14 @@ export default class Workbench extends View {
           h_flex().id(`branch-${space.id}`).pl(20).pr(2).gap(4).items_start().tooltip(space.branch)
             .child(svg('mods/workspace-chrome/branch.svg').size(11).flex_none().text_color(t.accent))
             .child(h_flex().flex_1().min_w(0).flex_wrap().gap(0).items_start().children(
-              branchTokens(space.branch).map(part=>div().flex_none().text_size(10).line_height('13px').text_color(t.muted).child(part)))))))
+              branchTokens(space.branch).map(part=>div().flex_none().text_size(11).line_height('13px').text_color(t.muted).child(part)))))))
       .when(!folded,e=>e.child(div().id(`rows-${space.id}`).relative().h(total*ROW+termExtra)
         // 极轻树线：项目折叠箭头下方起，连到每行图标左侧。
         .when(total,e=>e
           .child(div().absolute().left(TREE_X).top(0).w(1).h((total-1)*ROW+ROW_H/2).bg(t.border))
           .children(Array.from({length:total},(_,i)=>div().absolute().left(TREE_X).top(i*ROW+ROW_H/2).w(TICK_W).h(1).bg(t.border))))
         .children(rows.concat(termViews))))
-      .when(!folded&&hint,e=>e.child(div().px(26).py(3).text_size(10.5).text_color(t.dim).child(hint)));
+      .when(!folded&&hint,e=>e.child(div().px(26).py(3).text_size(11).text_color(t.dim).child(hint)));
   }
   spaceMenu(space) {
     openOverlay({mod:'agent-workbench',kind:'popup',width:184,height:118,props:{spaceMenu:true,id:space.id}});
@@ -692,9 +692,9 @@ export default class Workbench extends View {
       .child(h_flex().id('recent-all').h(24).px(8).gap(6).items_center().text_color(t.muted)
         .on_click((_e,cx)=>{this.recentOpen=!this.recentOpen;cx.notify();})
         .child(chevron(!this.recentOpen,t))
-        .child(div().flex_1().text_size(11).font_semibold().child(`最近会话 · ${records.length}`)))
+        .child(div().flex_1().text_size(12).font_semibold().child(`最近会话 · ${records.length}`)))
       .when(this.recentOpen,e=>e.child(v_flex().gap(2).children(shown.map(r=>this.recentRow(r,t)))))
-      .when(this.recentOpen&&records.length>8,e=>e.child(div().id('recent-more').px(8).py(4).text_size(10.5).text_color(t.accent).cursor_pointer()
+      .when(this.recentOpen&&records.length>8,e=>e.child(div().id('recent-more').px(8).py(4).text_size(11).text_color(t.accent).cursor_pointer()
         .on_click((_e,cx)=>{this.showAllRecent=!this.showAllRecent;cx.notify();})
         .child(this.showAllRecent?'收起':'查看全部（'+records.length+'）')));
   }
@@ -706,10 +706,10 @@ export default class Workbench extends View {
       .when(action==='restore',e=>e.cursor_pointer().on_click((_e,cx)=>{if(this.busy.has(record.address))return;this.restore(record,cx);}))
       .when(action==='fresh',e=>e.cursor_pointer().on_click((_e,cx)=>{cx.stop_propagation();this.failDialog(record,record.reason);}))
       .child(h_flex().gap(6).items_center()
-        .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child(record.name))
-        .when(record.spaceName,e=>e.child(div().flex_none().text_size(10).text_color(t.dim).child(record.spaceName)))
-        .when(action==='restore'&&busy,e=>e.child(div().text_size(10.5).text_color(t.dim).child('处理中…'))))
-      .when(record.reason,e=>e.child(div().text_size(10.5).text_color(t.blocked).child(record.reason)));
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.muted).child(record.name))
+        .when(record.spaceName,e=>e.child(div().flex_none().text_size(11).text_color(t.dim).child(record.spaceName)))
+        .when(action==='restore'&&busy,e=>e.child(div().text_size(11).text_color(t.dim).child('处理中…'))))
+      .when(record.reason,e=>e.child(div().text_size(11).text_color(t.blocked).child(record.reason)));
   }
   close(cx) {
     this.closed=true;this.quotaTimer?.cancel();this.intentTimer?.cancel();this.hint?.close();this.quota?.close();this.usage?.close();this.stopDragTimer();this.drag=null;this.orderPreviews.clear();
@@ -741,15 +741,15 @@ export default class Workbench extends View {
       .on_mouse_down_out((_e,cx)=>this.cancelDrag(cx,'outside'))
       .child(v_flex().p(10).gap(6).size_full()
         .child(h_flex().h(26).px(8).items_center()
-          .child(div().flex_1().text_size(11.5).font_semibold().text_color(t.muted).child('工作台'))
+          .child(div().flex_1().text_size(12.5).font_semibold().text_color(t.muted).child('工作台'))
           .child(h_flex().id('space-new').w(18).h(18).items_center().justify_center().text_color(t.dim)
             .cursor_pointer().tooltip('新建 Space').on_click(()=>run('space.new'))
             .child(svg('mods/workspace-chrome/plus.svg').size(12))))
-        .when(this.error,e=>e.child(div().text_size(11).text_color(t.blocked).child(this.error)))
+        .when(this.error,e=>e.child(div().text_size(11.5).text_color(t.blocked).child(this.error)))
         .child(v_flex().flex_1().min_h(0).overflow_y_scrollbar().pt(4).pb(4)
           .children(spaces().map(s=>this.group(s,list.filter(a=>a.space===s.id),all)))
           .when(recent,e=>e.child(recent)))
-        .when(!list.length,e=>e.child(div().text_size(11.5).text_color(t.dim).child('暂无活动 Agent'))))
+        .when(!list.length,e=>e.child(div().text_size(12).text_color(t.dim).child('暂无活动 Agent'))))
       .when(quota,e=>e.child(quota))
       // 拖动捕获层：浮在侧栏最上层、不参与布局，覆盖整个侧栏。
       .when(this.drag,e=>e.child(div().id('drag-layer').absolute().inset(0).w_full().h_full()
