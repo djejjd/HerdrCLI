@@ -511,8 +511,13 @@ export default class Tabs extends View {
   sendDecision(row, decision, cx) {
     if (this.sending) return;
     if (decision === "later") {
-      // 标签模式：稍后 = 收起当前待批标签，不发事件、不改账本。
+      // 标签模式：稍后 = 写同关闭一致的 marker + 收起标签，下一轮同签名不自动展开。
       const space = spaces().find(s => s.active);
+      if (space) {
+        const markers = JSON.parse(localStorage.getItem("approvals.closed") ?? "{}");
+        markers[space.id] = { signature: spaceSignature({ rows: this.panelState()?.rows ?? [], space, knownSpaces: spaces() }), at: Date.now() };
+        localStorage.setItem("approvals.closed", JSON.stringify(markers));
+      }
       const id = chipTarget({ panes: panes(), tabs: space?.tabs ?? [] });
       if (id) this.runCleanup("settle", id, () => run("tab.settle", { id }));
       return;

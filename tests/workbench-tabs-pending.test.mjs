@@ -892,3 +892,12 @@ test('静态：main 里所有 tab.close 都走 closeTab 校验', () => {
   const direct = (main.match(/run\("tab\.close"/g) ?? []).length;
   assert.ok(direct <= 1, '只允许 closeTab 内部出现一次 run tab.close');
 });
+
+
+test('later 标记：同签名不自动展开；force 可开；签名变化后可回来', () => {
+  const P = id => ({ pane: 'p' + id, tab: id, mod: 'workbench-tabs' });
+  const tabs = [{ id: 'b', name: '待批', settled: true }, { id: 'm' }];
+  assert.equal(creationPlan({ tabs, panes: [P('b')], count: 2, mode: 'ensure', markerKeep: true }), 'none');
+  assert.equal(creationPlan({ tabs, panes: [P('b')], count: 2, mode: 'force', markerKeep: true }), 'none');
+  assert.equal(creationPlan({ tabs, panes: [P('b')], count: 2, mode: 'ensure', markerKeep: false }), 'unsettle');
+});

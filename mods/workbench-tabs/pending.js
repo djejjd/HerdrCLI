@@ -512,6 +512,7 @@ export function creationPlan({ tabs, panes, count, mode, markerKeep, } = {}) {
   const ours = named.filter(t => paneOf(t.id)?.mod === 'workbench-tabs');
   if (ours.length) {
     const tab = ours[0];
+    if (markerKeep) return 'none'; // 稍后/关闭标记：同签名不自动展开
     if (Number(count) > 0 && tab.settled) return 'unsettle';
     return 'none';
   }
