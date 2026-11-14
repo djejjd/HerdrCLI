@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
   splitRow, parseLedger, rowKey, countRows, ageText, classifyTarget, chipState, PendingStore, fixturePath, listPlan,
   ledgerSignature, pickState, rowsForSpace, pickApprovalsPane, chipNode, globalCount,
-  filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, cleanupPlan, cleanupLogLine, createArgs2, tabDot, readyGate, spaceSignature, markerPlan, createdRing, requestPlan, creationPlan, createLockPlan, rebuildPlan, spacePlan, retryPlan, cleanupFailureLine, rowActions, decisionEvent, chipLabel,
+  filterVisibleTabs, ensurePlan, settlePlan, chipTarget, createArgs, legacyCreateArgs, createFailure, cleanupPlan, cleanupLogLine, createArgs2, tabDot, readyGate, spaceSignature, markerPlan, createdRing, requestPlan, creationPlan, createLockPlan, rebuildPlan, normalizeType, normalizeRow, spacePlan, retryPlan, cleanupFailureLine, rowActions, decisionEvent, chipLabel,
 } from '../mods/workbench-tabs/pending.js';
 
 const HEAD = '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |';
@@ -857,4 +857,23 @@ test('静态：所有创建路径都走 createApprovalsTab，且无 focus 参数
   assert.ok((main.match(/createApprovalsTab\(/g) ?? []).length >= 4, '四条路径都要调 helper');
   assert.equal(/focus\s*:/.test(main), false);
   assert.equal(/focus\s*:/.test(readFileSync(new URL('../mods/workbench-tabs/pending.js', import.meta.url), 'utf8')), false);
+});
+
+
+test('类型缺失/空/未知一律按授权；normalizeRow 消灭 undefined', () => {
+  assert.equal(normalizeType(undefined), '授权');
+  assert.equal(normalizeType(''), '授权');
+  assert.equal(normalizeType('选择'), '选择');
+  assert.equal(normalizeType('通知'), '授权');
+  const row = normalizeRow({ what: undefined, impact: null, where: undefined, project: null, suggestion: undefined, space: undefined, type: undefined });
+  for (const k of ['what', 'impact', 'where', 'project', 'suggestion', 'space']) assert.equal(typeof row[k], 'string');
+  assert.equal(row.type, '授权');
+});
+
+test('静态：approvalRow 不得对 r 字段裸 child/tooltip', () => {
+  const main = readFileSync(new URL('../mods/workbench-tabs/main.js', import.meta.url), 'utf8');
+  const body = main.slice(main.indexOf('approvalRow(r, t) {'), main.indexOf('decisionButtons('));
+  assert.equal(/\.child\(r\./.test(body), false);
+  assert.equal(/\.tooltip\(r\./.test(body), false);
+  assert.match(body, /String\(r\?\.type/);
 });

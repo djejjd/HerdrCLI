@@ -76,7 +76,7 @@ export function parseLedger(text) {
       // 缺 Space 列或空格子 = 全局，所有 Space 都显示（安全侧）。
       space: cut(iSpace >= 0 ? cells[iSpace] : ''),
       // 类型缺失/未知一律按授权（更严格的解释）。
-      type: (iType >= 0 ? cut(cells[iType]) : '') === '选择' ? '选择' : '授权',
+      type: normalizeType(iType >= 0 ? cut(cells[iType]) : ''),
       suggestion: cut(iSuggest >= 0 ? cells[iSuggest] : ''),
       options: (iOptions >= 0 ? String(cells[iOptions] ?? '') : '')
         .split(/[｜|]/).map(x => x.trim()).filter(Boolean).slice(0, 2),
@@ -536,4 +536,15 @@ export function rebuildPlan({ named, panes, since, now = Date.now(), created = [
   if (named.some(t => paneOf(t.id)?.mod === 'workbench-tabs')) return null;
   const known = named.find(t => (Array.isArray(created) ? created : []).includes(t.id));
   return known ? { id: known.id } : null;
+}
+
+/** 类型只允许「选择」；其余（缺失/空/未知）一律按「授权」。 */
+export function normalizeType(value) {
+  return String(value ?? '').trim() === '选择' ? '选择' : '授权';
+}
+
+/** 渲染字段兜底：任何 undefined/null 都变成字符串，避免 child(undefined) 崩溃。 */
+export function normalizeRow(row) {
+  const s = v => (v == null ? '' : String(v));
+  return { ...row, what: s(row?.what), impact: s(row?.impact), where: s(row?.where), project: s(row?.project), suggestion: s(row?.suggestion), space: s(row?.space), type: normalizeType(row?.type) };
 }

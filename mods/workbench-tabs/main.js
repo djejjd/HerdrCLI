@@ -419,31 +419,37 @@ export default class Tabs extends View {
   }
 
   approvalRow(r, t) {
+    const what = String(r?.what ?? "");
+    const type = String(r?.type ?? "授权") || "授权";
+    const project = String(r?.project ?? "");
+    const impact = String(r?.impact ?? "");
+    const where = String(r?.where ?? "");
+    const space = String(r?.space ?? "");
     const key = rowKey(r), acked = Boolean(this.acks[key]);
     const target = classifyTarget(r.where, home());
     return v_flex().id(`ap-${key}`).gap(2).px(8).py(6).rounded(6).hover(s => s.bg(t.hover))
       .child(h_flex().gap(6).items_center()
-        .child(div().flex_1().min_w(0).whitespace_normal().max_h(32).overflow_hidden().tooltip(r.what)
-          .text_size(12.5).font_medium().opacity(acked ? 0.55 : 1).child(r.what))
+        .child(div().flex_1().min_w(0).whitespace_normal().max_h(32).overflow_hidden().tooltip(what)
+          .text_size(12.5).font_medium().opacity(acked ? 0.55 : 1).child(what))
         .child(div().text_size(11).text_color(t.dim).child(ageText(r))))
-      .when(Boolean(r.impact), el => el.child(div().text_size(11.5).text_color(t.muted).truncate().child(`不做会怎样：${r.impact}`)))
+      .when(Boolean(impact), el => el.child(div().text_size(11.5).text_color(t.muted).truncate().child(`不做会怎样：${impact}`)))
       .child(h_flex().gap(6).items_center()
         .child(div().h(16).px(5).items_center().rounded(4).border(1).border_color(t.border)
-          .child(div().text_size(10).text_color(r.type === "选择" ? t.accent : t.dim).child(r.type)))
-        .when(r.type === "选择" && Boolean(r.suggestion), el => el.child(div().flex_1().min_w(0).truncate()
-          .text_size(11).text_color(t.muted).tooltip(r.suggestion).child(`我建议：${r.suggestion}`)))
+          .child(div().text_size(10).text_color(type === "选择" ? t.accent : t.dim).child(type)))
+        .when(type === "选择" && Boolean(r.suggestion), el => el.child(div().flex_1().min_w(0).truncate()
+          .text_size(11).text_color(t.muted).tooltip(String(r.suggestion ?? "")).child(`我建议：${r.suggestion}`)))
         .child(div().flex_1())
         .child(div().text_size(11).text_color(t.dim)
-          .tooltip(r.space ? (r.project || r.space) : "全局条目：所有 Space 都显示")
-          .child(r.space ? (r.project || r.space) : "全局"))
+          .tooltip(space ? (project || space) : "全局条目：所有 Space 都显示")
+          .child(space ? (project || space) : "全局"))
         .child(h_flex().h(20).px(6).items_center().rounded(5).cursor_pointer().bg(t.hover)
           .on_click((_e, cx) => { cx.stop_propagation(); this.toggleAck(key); cx.notify(); })
           .child(div().text_size(11).text_color(acked ? t.accent : t.muted).child(acked ? "已读" : "标已读")))
         .when(Boolean(target), el => el.child(h_flex().h(20).px(6).items_center().rounded(5).cursor_pointer().bg(t.hover)
-          .tooltip(r.where)
-          .on_click((_e, cx) => { cx.stop_propagation(); this.openTarget(r.where); })
+          .tooltip(where)
+          .on_click((_e, cx) => { cx.stop_propagation(); this.openTarget(where); })
           .child(div().text_size(11).text_color(t.muted).child("打开")))))
-      .when(Boolean(r.where) && !target, el => el.child(div().text_size(11).text_color(t.dim).truncate().child(r.where)))
+      .when(Boolean(where) && !target, el => el.child(div().text_size(11).text_color(t.dim).truncate().child(where)))
       .child(h_flex().gap(6).items_center().px(2).py(2)
         .children(this.decisionButtons(r, t, key))
         .child(div().flex_1())
