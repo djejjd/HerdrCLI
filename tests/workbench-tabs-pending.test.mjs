@@ -4,7 +4,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   splitRow, parseLedger, rowKey, countRows, ageText, classifyTarget, chipState, PendingStore, fixturePath, listPlan,
-  nextEmptyStreak, closePlan, navPlan, ledgerSignature, pickState, closeFocusPlan, creationHint, rowsForSpace, pickApprovalsPane, chipNode, globalCount,
+  ledgerSignature, pickState, rowsForSpace, pickApprovalsPane, chipNode, globalCount,
+  chipAction, rowActions, decisionEvent,
 } from '../mods/workbench-tabs/pending.js';
 
 const HEAD = '| 要你做什么 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |';
@@ -267,86 +268,6 @@ test('分页：已完成行不进入列表，页数按未处理行算', () => {
 });
 
 
-test('空态计数：连续两次成功读到 EMPTY 才累积，其它状态清零', () => {
-  assert.equal(nextEmptyStreak(0, 'empty'), 1);
-  assert.equal(nextEmptyStreak(1, 'empty'), 2);
-  assert.equal(nextEmptyStreak(2, 'empty'), 3);
-  assert.equal(nextEmptyStreak(1, 'count'), 0);
-  assert.equal(nextEmptyStreak(2, 'missing'), 0, '读取失败/缺失不算空态');
-  assert.equal(nextEmptyStreak(2, 'error'), 0);
-  assert.equal(nextEmptyStreak(0, 'count'), 0);
-});
-
-test('自动关闭判定：只有非当前、标签数>1、连续两次空态才关', () => {
-  const base = { kind: 'empty', active: false, tabCount: 2, emptyStreak: 2 };
-  assert.equal(closePlan(base), 'close');
-  assert.equal(closePlan({ ...base, emptyStreak: 1 }), 'keep', '第一次空态不动');
-  assert.equal(closePlan({ ...base, active: true }), 'banner', '当前标签只提示');
-  assert.equal(closePlan({ ...base, tabCount: 1 }), 'banner', '仅剩一个标签不关');
-  assert.equal(closePlan({ ...base, kind: 'count' }), 'keep');
-  assert.equal(closePlan({ ...base, kind: 'missing' }), 'keep', '缺失不算空');
-  assert.equal(closePlan({ ...base, kind: 'error' }), 'keep', '解析失败不算空');
-});
-
-test('导航：tracked 存活优先复用，否则按 panes 兜底，随后才是新建', () => {
-  const tabs = [{ id: 'tb1' }, { id: 'tb2' }];
-  const panes = [{ pane: 'p1', tab: 'tb1', mod: 'workbench-tabs' }];
-  assert.deepEqual(navPlan({ panes, tabs, tracked: 'tb1', now: 1000 }), { kind: 'open', tab: 'tb1', pane: 'p1' });
-  // tracked 已不在 tabs 里，panes 里也没有 -> 新建
-  assert.deepEqual(navPlan({ panes: [], tabs, tracked: 'tb9', opening: 0, now: 1000 }), { kind: 'create' });
-  // tracked 失效但 panes 仍能兜底
-  assert.deepEqual(navPlan({ panes, tabs, tracked: 'tb9', now: 1000 }), { kind: 'open', tab: 'tb1', pane: 'p1' });
-});
-
-test('导航：在途锁 5 秒内重复点击只等待，不重复新建', () => {
-  const args = { panes: [], tabs: [{ id: 'tb1' }], tracked: null, opening: 10_000 };
-  assert.equal(navPlan({ ...args, now: 10_500 }).kind, 'wait', '500ms 内重复点');
-  assert.equal(navPlan({ ...args, now: 14_900 }).kind, 'wait', '4.9s 仍是等待');
-  assert.equal(navPlan({ ...args, now: 15_100 }).kind, 'create', '5s 后允许重试');
-});
-
-test('连续三次开→关→再开：每个周期只允许一次新建', () => {
-  // 模拟真实时序：tab.new 之后 panes/tracked 还没更新（下一帧才有），
-  // 此时连点必须只等待，不能再发一次 tab.new。
-  let panes = [];
-  let tabs = [{ id: 'main' }];
-  let tracked = null;
-  let opening = 0;
-  let creates = 0;
-  const click = (now) => {
-    const plan = navPlan({ panes, tabs, tracked, opening, now });
-    if (plan.kind === 'create') {
-      creates += 1;
-      opening = now;
-      tabs = [...tabs, { id: `tb${creates}` }];
-    }
-    return plan.kind;
-  };
-  for (let cycle = 1; cycle <= 3; cycle += 1) {
-    const base = cycle * 10_000;
-    assert.equal(click(base), 'create', `第 ${cycle} 次开：新建`);
-    assert.equal(click(base + 200), 'wait', `第 ${cycle} 次：新 pane 还没出现时连点只等待`);
-    assert.equal(click(base + 900), 'wait', `第 ${cycle} 次：锁内仍等待`);
-    assert.equal(creates, cycle, `第 ${cycle} 次开只新建一次`);
-    // 下一帧 pane 出现，tracked 记住它
-    tracked = `tb${creates}`;
-    panes = [{ pane: `p${creates}`, tab: tracked, mod: 'workbench-tabs' }];
-    assert.equal(click(base + 1000), 'open', 'pane 出现后点击是复用');
-    // 关掉这个标签：下一次点击属于下一周期，应能重建
-    panes = [];
-    tabs = tabs.filter(t => t.id !== tracked);
-    tracked = null;
-  }
-  assert.equal(creates, 3, '三个周期共三次新建，没有重复');
-  assert.equal(navPlan({ panes: [], tabs: [{ id: 'main' }], tracked: null, now: 99_000 }).kind, 'create', '全部关掉后仍可重建');
-});
-test('手动关闭后仍有 COUNT：chip 可见，再点走重建', () => {
-  assert.equal(chipState({ kind: 'count', count: 3 }).kind, 'count');
-  assert.equal(navPlan({ panes: [], tabs: [{ id: 'tb1' }], tracked: null, now: 5000 }).kind, 'create');
-  assert.equal(navPlan({ panes: [{ pane: 'p1', tab: 'tb1', mod: 'workbench-tabs' }], tabs: [{ id: 'tb1' }], tracked: null, now: 5000 }).kind, 'open');
-});
-
-
 test('发布签名：条数相同但内容变化也必须变', () => {
   const base = { kind: 'count', count: 2, rows: [
     { what: '甲', where: 'w1', proposedAt: T, project: 'P', done: false },
@@ -418,46 +339,6 @@ test('真实账本样例：1 条未处理 + 带括注的已处理 + 示例行', 
 });
 
 
-test('关闭后的焦点恢复：回到上一个会话，原窗已关则退到首个可用', () => {
-  const tabs = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
-  // 待批标签还在：不切换
-  assert.equal(closeFocusPlan({ closing: 'b', prev: 'a', tabs }), null);
-  // 待批已关、上一个还在：回 a
-  assert.equal(closeFocusPlan({ closing: 'b', prev: 'a', tabs: [{ id: 'a' }, { id: 'c' }] }), 'a');
-  // 上一个也没了：退到同空间首个不是 closing 的
-  assert.equal(closeFocusPlan({ closing: 'b', prev: 'z', tabs: [{ id: 'a' }, { id: 'c' }] }), 'a');
-  // 只剩 closing 一个：没有可恢复目标
-  assert.equal(closeFocusPlan({ closing: 'b', prev: null, tabs: [] }), null);
-});
-
-test('跨 space 隔离：别的 space 的同名面板不算待批标签', () => {
-  const here = [{ id: 'h1' }, { id: 'h2' }];
-  const panes = [
-    { pane: 'p9', tab: 'x9', mod: 'workbench-tabs' },
-    { pane: 'p1', tab: 'h1', mod: 'workbench-tabs' },
-  ];
-  // 只认当前 space 的 tab 列表，别的 space 的同 mod 面板不参与
-  assert.deepEqual(navPlan({ panes, tabs: here, tracked: null, now: 1000 }), { kind: 'open', tab: 'h1', pane: 'p1' });
-  assert.deepEqual(navPlan({ panes: [panes[0]], tabs: here, tracked: null, now: 1000 }), { kind: 'create' });
-});
-
-test('在途锁与失败窗口统一 5 秒', () => {
-  const args = { panes: [], tabs: [{ id: 'a' }], tracked: null, opening: 10_000 };
-  assert.equal(navPlan({ ...args, now: 12_000 }).kind, 'wait');
-  assert.equal(navPlan({ ...args, now: 15_100 }).kind, 'create');
-  // pane 延迟 3 秒时才出现：两次点击也只建一次
-  let creates = 0;
-  const tabs = [{ id: 'a' }];
-  const click = (now) => {
-    const plan = navPlan({ panes: [], tabs, tracked: null, opening: creates ? 10_000 : 0, now, cooldown: 5000 });
-    if (plan.kind === 'create') creates += 1;
-    return plan.kind;
-  };
-  assert.equal(click(10_000), 'create');
-  assert.equal(click(13_000), 'wait');
-  assert.equal(creates, 1);
-});
-
 test('表头扫描：跳过前置表，直到含「要你做什么」的那张表', () => {
   const text = [
     '| 项目 | 负责人 |',
@@ -476,14 +357,6 @@ test('表头扫描：跳过前置表，直到含「要你做什么」的那张�
   assert.equal(unrelated.error, 'no-what', '有表但没有必需列');
   assert.equal(parseLedger('纯文字没有表格').error, 'no-header');
 });
-
-test('创建提示：出现即清除，失败立刻提示，5 秒没出现算超时', () => {
-  assert.equal(creationHint({ appearing: true, opening: 10_000, now: 10_100 }), null);
-  assert.equal(creationHint({ appearing: false, failed: true, opening: 10_000, now: 10_100 }), 'failed');
-  assert.equal(creationHint({ appearing: false, opening: 10_000, now: 14_900 }), null);
-  assert.equal(creationHint({ appearing: false, opening: 10_000, now: 15_100 }), 'timeout');
-});
-
 
 test('Space 列：解析到每条上；缺列时全部按全局', () => {
   const withSpace = parseLedger([
@@ -558,46 +431,6 @@ test('静态检查：main.js 用到的 pending 导出必须都在 import 里', (
   assert.deepEqual(missing, [], `有导出被引用但没 import：${missing.join(', ')}`);
 });
 
-test('外部关闭（Cmd+W）后状态清理，再开不复用陈旧标签', () => {
-  const tabsOpen = [{ id: 'main' }, { id: 'tb2' }];
-  const panes = [{ pane: 'p2', tab: 'tb2', mod: 'workbench-tabs' }];
-  let tracked = 'tb2';
-  let restoreTo = 'main';
-  assert.equal(navPlan({ panes, tabs: tabsOpen, tracked, opening: 0, now: 1000 }).kind, 'open');
-  // 外部关闭：模型里标签与面板都没了，本地 tracked 还没来得及清
-  const tabsAfter = [{ id: 'main' }];
-  assert.equal(closeFocusPlan({ closing: tracked, prev: restoreTo, tabs: tabsAfter }), 'main', '焦点回到原会话');
-  tracked = null; restoreTo = null;
-  // 再点：不得拿陈旧 tracked 去 open
-  assert.equal(navPlan({ panes: [], tabs: tabsAfter, tracked, opening: 0, now: 2000 }).kind, 'create');
-});
-
-
-test('关闭判定按 Space 隔离：A 实例不得碰 B 的标签，B 只关自己的', () => {
-  const panes = [
-    { pane: 'pA', tab: 'tbA', mod: 'workbench-tabs' },
-    { pane: 'pB', tab: 'tbB', mod: 'workbench-tabs' },
-  ];
-  const tabsA = [{ id: 'tbA' }, { id: 'tbMainA' }];
-  const tabsB = [{ id: 'tbB' }, { id: 'tbMainB' }];
-  assert.equal(pickApprovalsPane(panes, tabsA).pane, 'pA');
-  assert.equal(pickApprovalsPane(panes, tabsB).pane, 'pB');
-  // 当前 Space 的 tabs 里没有 B 的标签时，B 的面板不参与
-  assert.equal(pickApprovalsPane([panes[1]], tabsA), null);
-  // B 在 0 条且非当前、标签数>1 时关闭自己
-  assert.equal(closePlan({ kind: 'empty', active: false, tabCount: tabsB.length, emptyStreak: 2 }), 'close');
-  // 两 Space 各自有标签时互不影响：A 的判定只看 A 的 tabs
-  assert.equal(closePlan({ kind: 'count', active: false, tabCount: tabsA.length, emptyStreak: 0 }), 'keep');
-});
-
-
-test('静态检查：main.js 不得把 null 传给 child/slot（渲染期空子元素会抛错）', () => {
-  const main = readFileSync(new URL('../mods/workbench-tabs/main.js', import.meta.url), 'utf8');
-  assert.equal(/\.child\(\s*null\s*\)/.test(main), false, '不要 .child(null)');
-  assert.equal(/\.children\(\s*null\s*\)/.test(main), false, '不要 .children(null)');
-  assert.equal(/slot\(\s*null\s*\)/.test(main), false, '空槽位用 emptySlot()，不要 slot(null)');
-});
-
 test('三种 Space 分支：未知按全局、别的现存 Space 隐藏、空 Space 只看全局', () => {
   const known = [{ id: 'sp1', name: 'AIAgentCLI' }];
   const rows = [{ what: '全局行', space: '' }, { what: 'A 的行', space: 'AIAgentCLI' }];
@@ -631,12 +464,59 @@ test('全局计数：只算未处理且没有 Space 的行', () => {
   assert.equal(globalCount(null), 0);
 });
 
-test('自动关闭只看非激活：激活中的待批标签 0 条也不关', () => {
-  assert.equal(closePlan({ kind: 'empty', active: true, tabCount: 3, emptyStreak: 5 }), 'banner');
-  assert.equal(closePlan({ kind: 'empty', active: false, tabCount: 3, emptyStreak: 2 }), 'close');
+test('chipAction：开着→关闭；有标签→切过去；否则→浮层（绝不新建）', () => {
+  assert.equal(chipAction({ open: true, pane: null }), 'close');
+  assert.equal(chipAction({ open: false, pane: { pane: 'p1', tab: 'tb1' } }), 'focus');
+  assert.equal(chipAction({ open: false, pane: null }), 'popup');
 });
 
-test('静态检查：不得使用永久占位（emptySlot / approvals-slot）', () => {
+test('动作映射：授权两按钮、选择四按钮；类型缺失按授权', () => {
+  assert.deepEqual(rowActions('授权'), ['approve', 'reject', 'later']);
+  assert.deepEqual(rowActions('选择'), ['suggest', 'other', 'none', 'later']);
+  assert.deepEqual(rowActions(''), ['approve', 'reject', 'later']);
+  assert.deepEqual(rowActions('未知类型'), ['approve', 'reject', 'later']);
+});
+
+test('类型与建议/备选解析：缺省授权，备选最多 2 个', () => {
+  const text = [
+    '| 要你做什么 | 类型 | 状态 | 不做会怎样 | 去哪点 | 提出时间 | 项目 |',
+    '|---|---|---|---|---|---|---|',
+    `| 授权事项 | 授权 | 待用户 | i | w | ${T} | P |`,
+    `| 选择题 | 选择 | 待用户 | i | w | ${T} | P |`,
+  ].join('\n');
+  // 建议/备选列可选：这里没有，选择题只给选其它/都不行（由 rowActions 之外的渲染处理）
+  const p = parseLedger(text);
+  assert.equal(p.error, null);
+  assert.deepEqual(p.rows.map(r => r.type), ['授权', '选择']);
+
+  const withSuggest = parseLedger([
+    '| 要你做什么 | 类型 | 状态 | 建议 | 备选 |',
+    '|---|---|---|---|---|',
+    `| A 方案 | 选择 | 待用户 | 方案甲 | 方案乙｜方案丙 |`,
+  ].join('\n'));
+  assert.equal(withSuggest.error, null);
+  assert.equal(withSuggest.rows[0].suggestion, '方案甲');
+  assert.deepEqual(withSuggest.rows[0].options, ['方案乙', '方案丙']);
+});
+
+test('决定事件文案：含类型、决定、时间、标题；选其它带序号', () => {
+  const row = { what: '合并 PR #7', project: 'HerdrCLI', type: '授权', where: 'https://x/7' };
+  const msg = decisionEvent(row, 'approve', 1700000000000);
+  assert.match(msg, /^PENDING-DECISION｜/);
+  assert.match(msg, /授权/);
+  assert.match(msg, /批准/);
+  assert.match(msg, /合并 PR #7/);
+  const other = decisionEvent({ ...row, type: '选择' }, 'other:2', 1700000000000);
+  assert.match(other, /选择/);
+  assert.match(other, /选其它:2/);
+  const none = decisionEvent({ ...row, type: '选择' }, 'none', 1700000000000);
+  assert.match(none, /都不行/);
+});
+
+test('静态检查：chip 路径不得出现 tab.new，且不得引用已删除的旧函数', () => {
   const main = readFileSync(new URL('../mods/workbench-tabs/main.js', import.meta.url), 'utf8');
-  assert.equal(/emptySlot|approvals-slot/.test(main), false, '0 条应完全不渲染 chip');
+  assert.equal(/tab\.new/.test(main), false, '点 chip 不得新建标签');
+  for (const dead of ['closeFocusPlan', 'creationHint', 'navPlan', 'nextEmptyStreak', 'closePlan']) {
+    assert.equal(new RegExp(`\\b${dead}\\b`).test(main), false, `死代码未清：${dead}`);
+  }
 });

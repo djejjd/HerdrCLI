@@ -1,10 +1,10 @@
 // 工作台标签栏：沿用 Herdr 原生行为与已核实菜单，统一状态图标。
 import { statusIcon } from './status.js';
 import { sidebarToggle } from './controls.js';
-import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, nextEmptyStreak, closePlan, navPlan, ledgerSignature, pickState, closeFocusPlan, creationHint, rowsForSpace, countRows, pickApprovalsPane, chipNode, globalCount } from './pending.js';
+import { PendingStore, chipState, classifyTarget, rowKey, ageText, fixturePath, listPlan, ledgerSignature, pickState, rowsForSpace, countRows, pickApprovalsPane, chipNode, globalCount, chipAction, rowActions, decisionEvent } from './pending.js';
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, ScrollHandle } from "gpui-base";
-import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, props, home, exec, readTextFile } from "herdr";
+import { spaces, panes, run, openOverlay, closeOverlay, theme, window, shared, setShared, layout, settings, props, home, exec, readTextFile, hc } from "herdr";
 
 const PAGE = 6;
 const REASONS = { "no-header": "没有表格表头", "no-what": "缺「要你做什么」列", "no-status": "缺「状态」列", unreadable: "内容不是文本" };
@@ -30,48 +30,43 @@ export default class Tabs extends View {
     this.pressed = null;
     this.scroll = ScrollHandle.new();
     this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}");
-    // 待批 chip：只读账本，5 秒刷新一次；失焦时降到 30 秒。
     this.acks = loadAcks();
     this.sig = "";
     this.lastPoll = 0;
     this.store = new PendingStore({ read: async () => readTextFile(this.ledgerPath()) });
-    this.emptyStreak = 0;
-    this.closedTab = null;
     this.published = "";
-    this.approvalsTab = null;
-    this.opening = 0;
-    this.createError = null;
-    this.createFailed = false;
-    this.restoreTo = null;
-    this.approvalsActive = false;
-    this.watchTimer = null;
+    this.sent = "";
+    this.decisionError = null;
     if (_props?.approvals) {
-      // 待批标签：读一次拿首屏，之后靠 shared 更新，不自己轮询、也不触发关闭。
       this.page = 0;
-      this.store.refresh().then((state) => { if (!this.store.closed) { this.emptyStreak = nextEmptyStreak(0, state.kind); cx.notify(); } }).catch(() => {});
+      this.refreshPanel(cx);
+      this.timer = cx.timer.every(2000, c => this.refreshPanel(c));
       return;
     }
     this.timer = cx.timer.every(5000, c => this.pollApprovals(c));
     this.pollApprovals(cx);
   }
 
-  // 终态：作废在途读取并停表，popup 关闭后不再持有任何定时器。
+  refreshPanel(cx) {
+    if (this.store?.closed) return;
+    this.store.refresh().then((state) => {
+      if (this.store.closed) return;
+      if (state.kind === "empty") {
+        const id = props()?.overlay;
+        if (id) closeOverlay(id);
+        setShared("approvals.open", false);
+        return;
+      }
+      cx.notify();
+    }).catch(() => {});
+  }
+
+  // 终态：停表 + 关掉后清共享标记，chip 下次点击重新打开。
   close() {
     this.store?.close();
     this.timer?.cancel?.();
     this.timer = null;
-    this.stopWatch();
-  }
-
-  // 待批标签在时每 500ms 查一次：确认存在、发现关闭后把焦点还回去。
-  ensureWatch(cx) {
-    if (this.watchTimer) return;
-    this.watchTimer = cx.timer.every(500, () => this.trackApprovalsTab());
-  }
-
-  stopWatch() {
-    this.watchTimer?.cancel?.();
-    this.watchTimer = null;
+    if (props()?.approvals) setShared("approvals.open", false);
   }
 
   // 账本路径：默认全局账本；fixture 覆盖仅在有效期内且指向临时目录时生效，非法/过期立刻清掉。
@@ -91,12 +86,7 @@ export default class Tabs extends View {
       if (this.store.closed) return;
       const state = this.store.state;
       this.pruneAcks(state.rows ?? []);
-      this.emptyStreak = nextEmptyStreak(this.emptyStreak, state.kind);
-      if (state.kind !== "empty") this.closedTab = null;
-      this.trackApprovalsTab();
-      if (this.approvalsTab && !this.watchTimer) this.ensureWatch(cx);
       this.publishApprovals(state);
-      this.maybeCloseApprovals(state);
       const sig = `${state.kind}:${state.count ?? 0}:${state.reason ?? ""}:${state.rows?.length ?? 0}`;
       if (sig !== this.sig) { this.sig = sig; cx.notify(); }
     }).catch(() => {});
@@ -115,59 +105,6 @@ export default class Tabs extends View {
       rows: (state.rows ?? []).map(r => ({ what: r.what, impact: r.impact, where: r.where, proposedAt: r.proposedAt, project: r.project, done: r.done })),
       at: this.store?.at ?? null,
     });
-  }
-
-  // 跟踪待批标签：只认当前 space 的 tab；找到记住、消失清空并把焦点还给上个会话；
-  // 创建 5 秒仍没出现则提示，不重复建。
-  trackApprovalsTab() {
-    const space = spaces().find(s => s.active);
-    const tabs = space?.tabs ?? [];
-    const ids = new Set(tabs.map(t => t.id));
-    const pane = panes().find(p => p && p.mod === "workbench-tabs" && ids.has(p.tab));
-    if (pane) {
-      this.approvalsTab = pane.tab;
-      this.opening = 0;
-      this.createFailed = false;
-      this.createError = null;
-      this.approvalsActive = tabs.find(t => t.active)?.id === pane.tab;
-      return;
-    }
-    if (this.approvalsTab && !ids.has(this.approvalsTab)) {
-      const wasActive = this.approvalsActive;
-      const target = closeFocusPlan({ closing: this.approvalsTab, prev: this.restoreTo, tabs });
-      this.approvalsTab = null;
-      this.approvalsActive = false;
-      this.restoreTo = null;
-      this.stopWatch();
-      if (wasActive && target) run("tab.select", { id: target });
-      return;
-    }
-    const hint = creationHint({ appearing: false, failed: this.createFailed, opening: this.opening, now: Date.now() });
-    if (hint === "failed") {
-      this.createError = "创建待批标签失败，请重试";
-      this.createFailed = false;
-      this.opening = 0;
-      this.stopWatch();
-    } else if (hint === "timeout") {
-      this.createError = "没能创建待批标签，请再点一次";
-      this.opening = 0;
-      this.stopWatch();
-    }
-  }
-
-  // 自动关闭：只由轮询调用（不在 render 里），且只在非当前、同空间标签数 >1、连续两次连续空态时关。
-  maybeCloseApprovals(state) {
-    if (props()?.approvals) return;
-    // 只处理“当前实例所属 Space”的标签；别的 Space 的待批标签由它自己的 tab bar 关闭。
-    const space = spaces().find(s => s.active);
-    const tabs = space?.tabs ?? [];
-    const pane = pickApprovalsPane(panes(), tabs);
-    if (!pane) return;
-    const active = tabs.find(t => t.active)?.id === pane.tab;
-    const plan = closePlan({ kind: state.kind, active, tabCount: tabs.length, emptyStreak: this.emptyStreak });
-    if (plan !== "close" || this.closedTab === pane.tab) return;
-    this.closedTab = pane.tab;
-    run("tab.close", { id: pane.tab, confirmed: true });
   }
 
   // 待批标签读 shared 的状态；没有时退回自己那一次读取。
@@ -204,7 +141,6 @@ export default class Tabs extends View {
   }
 
   hint(s) {
-    if (this.createError) return this.createError;
     const where = this.ledgerPath();
     if (s.kind === "missing") return `账本缺失：${where}`;
     if (s.kind === "error") return `账本无法解析（${REASONS[s.reason] ?? s.reason}）：${where}`;
@@ -232,32 +168,23 @@ export default class Tabs extends View {
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click((_e, cx) => {
         cx.stop_propagation();
-        // 已有待批标签就切过去；创建后在途锁内连点只等待，避免建出两个。
         const space = spaces().find(s => s.active);
-        const tabs = space?.tabs ?? [];
-        const plan = navPlan({ panes: panes(), tabs, tracked: this.approvalsTab, opening: this.opening });
-        if (plan.kind === "wait") return;
-        // 记住从哪个会话进来的，待批标签被关掉后要回到这里。
-        const nowActive = tabs.find(t => t.active)?.id ?? null;
-        if (nowActive && plan.tab !== nowActive) this.restoreTo = nowActive;
-        this.ensureWatch(cx);
-        if (plan.kind === "open") {
-          this.approvalsTab = plan.tab;
-          run("tab.select", { id: plan.tab });
-          if (plan.pane) run("pane.focus", { pane: plan.pane });
+        const pane = pickApprovalsPane(panes(), space?.tabs ?? []);
+        const action = chipAction({ pane, open: Boolean(shared("approvals.open")) });
+        if (action === "close") {
+          const id = shared("approvals.overlay");
+          if (id) closeOverlay(id);
+          setShared("approvals.open", false);
           return;
         }
-        this.opening = Date.now();
-        this.createError = null;
-        this.createFailed = false;
-        try {
-          run("tab.new", { name: "待批", mod: "workbench-tabs", props: { approvals: true } });
-        } catch {
-          this.createFailed = true;
-          this.createError = "创建待批标签失败，请重试";
-          this.opening = 0;
-          this.stopWatch();
+        if (action === "focus") {
+          run("tab.select", { id: pane.tab });
+          if (pane.pane) run("pane.focus", { pane: pane.pane });
+          return;
         }
+        const id = openOverlay({ mod: "workbench-tabs", kind: "popup", width: 420, props: { approvals: true } });
+        setShared("approvals.open", true);
+        setShared("approvals.overlay", id);
       })
       .child(statusIcon(bad ? "idle" : "blocked", t))
       .child(div().text_size(12).font_medium().child(bad ? "待批 ?" : `待批 ${s.count}`));
@@ -268,22 +195,75 @@ export default class Tabs extends View {
     const target = classifyTarget(r.where, home());
     return v_flex().id(`ap-${key}`).gap(2).px(8).py(6).rounded(6).hover(s => s.bg(t.hover))
       .child(h_flex().gap(6).items_center()
-        .child(div().flex_1().min_w(0).truncate().text_size(12.5).font_medium().opacity(acked ? 0.55 : 1).child(r.what))
+        .child(div().flex_1().min_w(0).whitespace_normal().max_h(32).overflow_hidden().tooltip(r.what)
+          .text_size(12.5).font_medium().opacity(acked ? 0.55 : 1).child(r.what))
         .child(div().text_size(11).text_color(t.dim).child(ageText(r))))
       .when(Boolean(r.impact), el => el.child(div().text_size(11.5).text_color(t.muted).truncate().child(`不做会怎样：${r.impact}`)))
       .child(h_flex().gap(6).items_center()
+        .child(div().h(16).px(5).items_center().rounded(4).border(1).border_color(t.border)
+          .child(div().text_size(10).text_color(r.type === "选择" ? t.accent : t.dim).child(r.type)))
+        .when(r.type === "选择" && Boolean(r.suggestion), el => el.child(div().flex_1().min_w(0).truncate()
+          .text_size(11).text_color(t.muted).tooltip(r.suggestion).child(`我建议：${r.suggestion}`)))
+        .child(div().flex_1())
         .child(div().text_size(11).text_color(t.dim)
           .tooltip(r.space ? (r.project || r.space) : "全局条目：所有 Space 都显示")
           .child(r.space ? (r.project || r.space) : "全局"))
-        .child(div().flex_1())
         .child(h_flex().h(20).px(6).items_center().rounded(5).cursor_pointer().bg(t.hover)
           .on_click((_e, cx) => { cx.stop_propagation(); this.toggleAck(key); cx.notify(); })
           .child(div().text_size(11).text_color(acked ? t.accent : t.muted).child(acked ? "已读" : "标已读")))
         .when(Boolean(target), el => el.child(h_flex().h(20).px(6).items_center().rounded(5).cursor_pointer().bg(t.hover)
           .tooltip(r.where)
           .on_click((_e, cx) => { cx.stop_propagation(); this.openTarget(r.where); })
-          .child(div().text_size(11).text_color(t.muted).child("打开"))))
-      .when(Boolean(r.where) && !target, el => el.child(div().text_size(11).text_color(t.dim).truncate().child(r.where))));
+          .child(div().text_size(11).text_color(t.muted).child("打开")))))
+      .when(Boolean(r.where) && !target, el => el.child(div().text_size(11).text_color(t.dim).truncate().child(r.where)))
+      .child(h_flex().gap(6).items_center().px(2).py(2)
+        .children(this.decisionButtons(r, t, key))
+        .child(div().flex_1())
+        .when(this.sent === key, el => el.child(div().text_size(11).text_color(t.accent).child("已发送，等监督者更新账本")))
+        .when(Boolean(this.decisionError), el => el.child(h_flex().gap(4).items_center()
+          .child(div().text_size(11).text_color(t.blocked).child("发送失败"))
+          .child(h_flex().h(18).px(5).items_center().rounded(4).cursor_pointer().bg(t.hover)
+            .on_click((_e, cx) => { cx.stop_propagation(); try { cx.write_to_clipboard(this.lastMessage ?? ""); } catch {} })
+            .child(div().text_size(10).text_color(t.muted).child("复制消息"))))));
+  }
+
+  // 动作按钮：授权=批准/拒绝/稍后；选择=按建议/备选/都不行/稍后。按钮不贴边、不整行可点。
+  decisionButtons(r, t, key) {
+    const BTN = (label, decision) => h_flex().h(22).px(8).items_center().rounded(5).flex_none().cursor_pointer().bg(t.hover)
+      .on_click((_e, cx) => { cx.stop_propagation(); this.sendDecision(r, decision, cx); })
+      .child(div().text_size(11).text_color(t.foreground).child(label));
+    const out = [];
+    for (const action of rowActions(r.type)) {
+      if (action === "approve") out.push(BTN("批准", "approve"));
+      else if (action === "reject") out.push(BTN("拒绝", "reject"));
+      else if (action === "suggest") out.push(BTN("按建议", "suggest"));
+      else if (action === "none") out.push(BTN("都不行", "none"));
+      else if (action === "later") out.push(BTN("稍后", "later"));
+      else if (action === "other") {
+        (r.options ?? []).forEach((opt, i) => out.push(BTN(opt.length > 10 ? `${opt.slice(0, 10)}…` : opt, `other:${i + 1}`)));
+      }
+    }
+    return out;
+  }
+
+  // 只发事件，不写账本；发送失败保留文案可复制重试。
+  sendDecision(row, decision, cx) {
+    if (decision === "later") {
+      const id = props()?.overlay;
+      if (id) closeOverlay(id);
+      setShared("approvals.open", false);
+      return;
+    }
+    const msg = decisionEvent(row, decision);
+    this.lastMessage = msg;
+    const sup = this.store?.state?.meta?.supervisor;
+    if (!sup) { this.decisionError = true; cx.notify(); return; }
+    hc(["send", sup, msg]).then(r => {
+      if (r && r.code !== 0) throw new Error("send failed");
+      this.sent = rowKey(row);
+      this.decisionError = false;
+      cx.notify();
+    }).catch(() => { this.decisionError = true; cx.notify(); });
   }
 
   // The side panel is remembered per space: switching shows that space's choice

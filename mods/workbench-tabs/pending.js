@@ -55,6 +55,7 @@ export function parseLedger(text) {
   // 状态列必填：没有它就无法区分未处理与已处理，不能猜。
   if (at('状态') < 0) return { rows: [], error: 'no-status' };
   const iWhat = at(WHAT), iImpact = at('不做会怎样'), iWhere = at('去哪点'), iSpace = at('Space');
+  const iType = at('类型'), iSuggest = at('建议'), iOptions = at('备选');
   const iAt = at('提出时间'), iProject = at('项目'), iStatus = at('状态');
   const rows = [];
   for (let i = start; i < lines.length && rows.length < MAX_ROWS; i += 1) {
@@ -74,11 +75,22 @@ export function parseLedger(text) {
       proposedAt: cut(iAt >= 0 ? cells[iAt] : ''),
       // 缺 Space 列或空格子 = 全局，所有 Space 都显示（安全侧）。
       space: cut(iSpace >= 0 ? cells[iSpace] : ''),
+      // 类型缺失/未知一律按授权（更严格的解释）。
+      type: (iType >= 0 ? cut(cells[iType]) : '') === '选择' ? '选择' : '授权',
+      suggestion: cut(iSuggest >= 0 ? cells[iSuggest] : ''),
+      options: (iOptions >= 0 ? String(cells[iOptions] ?? '') : '')
+        .split(/[｜|]/).map(x => x.trim()).filter(Boolean).slice(0, 2),
       project: cut(iProject >= 0 ? cells[iProject] : ''),
       done: DONE_RE.test(status.trim()),
     });
   }
-  return { rows, error: null };
+  // front-matter 的「监督者: t19」是唯一来源；没有就留空，由 UI 禁用动作。
+  const meta = {};
+  for (const line of lines) {
+    const m = /^\s*监督者\s*[:：]\s*(\S+)/.exec(line);
+    if (m) { meta.supervisor = m[1]; break; }
+  }
+  return { rows, error: null, meta };
 }
 
 /** 一行的稳定 key：内容变则 key 变，已读标记随之失效。 */
@@ -190,8 +202,8 @@ export class PendingStore {
         else {
           const rows = parsed.rows;
           const count = countRows(rows);
-          // 空态与“没读到”必须分开：只有 empty 允许自动关闭标签。
-          next = count > 0 ? { kind: 'count', count, rows } : { kind: 'empty', rows };
+          // 空态与“没读到”必须分开：浮层在 empty 时要自动关闭。
+          next = count > 0 ? { kind: 'count', count, rows, meta: parsed.meta ?? {} } : { kind: 'empty', rows, meta: parsed.meta ?? {} };
         }
       }
       this.state = next;
@@ -225,39 +237,8 @@ export function fixturePath(raw, now = Date.now()) {
   return p;
 }
 
-/** 连续空态计数：只有成功解析出的 empty 才累加，其它状态一律清零。 */
-export function nextEmptyStreak(prev, kind) {
-  return kind === 'empty' ? (Number(prev) || 0) + 1 : 0;
-}
 
-/** 待批标签的自动关闭判定。
- *  close：非当前、同空间标签数 >1、连续两次成功读到空态；
- *  banner：空态但不能自动关（当前标签 / 仅剩一个标签），交给用户切走或手关；
- *  keep：未处理、缺失、读取失败都不动。 */
-export function closePlan({ kind, active, tabCount, emptyStreak }) {
-  if (kind !== 'empty') return 'keep';
-  if (Number(emptyStreak) < 2) return 'keep';
-  if (Number(tabCount) <= 1) return 'banner';
-  return active ? 'banner' : 'close';
-}
 
-/** chip 点击的去向：优先复用已跟踪且仍存活的标签，其次 panes 兜底，
- *  最后才新建；创建后在途锁内重复点击只返回 wait，避免连点建出两个标签。 */
-export function navPlan({ panes, tabs, tracked, opening, now = Date.now(), cooldown = 5000 } = {}) {
-  const list = Array.isArray(panes) ? panes : [];
-  const ids = new Set((Array.isArray(tabs) ? tabs : []).map(t => t && t.id));
-  // 只认当前 space 的 tab；别的 space 里同 mod 的面板不参与查重。
-  const mine = list.filter(p => p && ids.has(p.tab));
-  const alive = Boolean(tracked) && ids.has(tracked);
-  if (alive) {
-    const pane = mine.find(p => p.tab === tracked);
-    return { kind: 'open', tab: tracked, pane: pane?.pane ?? null };
-  }
-  const hit = mine.find(p => p.mod === 'workbench-tabs');
-  if (hit) return { kind: 'open', tab: hit.tab, pane: hit.pane };
-  if (opening && now - Number(opening) < cooldown) return { kind: 'wait' };
-  return { kind: 'create' };
-}
 
 const fnv = (text) => {
   let h = 0x811c9dc5;
@@ -289,23 +270,7 @@ export function pickState(sharedState, ownState) {
   return (Number(own.at) || 0) >= (Number(sh.at) || 0) ? own : sh;
 }
 
-/** 待批标签关闭后回到哪：标签还在就不动；上一个会话还在就回它；
- *  否则回同 space 的第一个可用标签；一个都没有则不切。 */
-export function closeFocusPlan({ closing, prev, tabs } = {}) {
-  const all = Array.isArray(tabs) ? tabs.filter(t => t && t.id) : [];
-  if (all.some(t => t.id === closing)) return null;
-  const rest = all.filter(t => t.id !== closing);
-  if (prev && rest.some(t => t.id === prev)) return prev;
-  return rest[0]?.id ?? null;
-}
 
-/** 创建待批标签的提示：出现即清；run 抛错立刻失败；超过 5 秒没出现算超时。 */
-export function creationHint({ appearing, failed, opening, now = Date.now(), timeout = 5000 } = {}) {
-  if (appearing) return null;
-  if (failed) return 'failed';
-  if (opening && now - Number(opening) >= timeout) return 'timeout';
-  return null;
-}
 
 /** 当前 Space 可见的待批行：全局（空格子）恒显示；本 Space 精确匹配；
  *  明确属于别的现存 Space 才隐藏；匹配不到（改名/删除/未登记）按全局处理，绝不静默隐藏。 */
@@ -341,4 +306,41 @@ export function chipNode(state) {
 /** 全局行数（未处理且没有 Space 标记），用于 chip tooltip 的“含全局 N”。 */
 export function globalCount(rows) {
   return (Array.isArray(rows) ? rows : []).filter(r => r && !r.done && !String(r.space ?? '').trim()).length;
+}
+
+/** 点 chip 的去向：已开着就关；本 Space 已有待批标签就切过去；否则弹浮层。
+ *  绝不新建标签页。 */
+export function chipAction({ open, pane } = {}) {
+  if (open) return 'close';
+  if (pane) return 'focus';
+  return 'popup';
+}
+
+/** 按类型给出动作集合：授权=批准/拒绝/稍后；选择=按建议/选其它/都不行/稍后。 */
+export function rowActions(type) {
+  if (type === '选择') return ['suggest', 'other', 'none', 'later'];
+  return ['approve', 'reject', 'later'];
+}
+
+const DECISION_TEXT = {
+  approve: '批准',
+  reject: '拒绝',
+  suggest: '按建议',
+  none: '都不行',
+  later: '稍后',
+};
+
+/** 给监督者的决定事件：PENDING-DECISION｜key｜类型｜决定｜ISO｜标题｜项目。
+ *  只发消息，不写账本；选其它带序号（other:1/other:2）。 */
+export function decisionEvent(row, decision, now = Date.now()) {
+  const key = rowKey(row);
+  const type = row?.type === '选择' ? '选择' : '授权';
+  let text = DECISION_TEXT[decision] ?? String(decision ?? '');
+  if (typeof decision === 'string' && decision.startsWith('other')) {
+    const n = decision.split(':')[1] ?? '1';
+    text = `选其它:${n}`;
+  }
+  const at = new Date(now).toISOString();
+  const title = String(row?.what ?? '').slice(0, 80);
+  return `PENDING-DECISION｜${key}｜${type}｜${text}｜${at}｜${title}｜${row?.project ?? ''}`;
 }
