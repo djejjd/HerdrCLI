@@ -4,9 +4,9 @@ import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle, InputState, Input } from "gpui-base";
 import { agents, terminals, panes, focused, spaces, run, hc, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window as herdrWindow, layout, checking, home, appHome, readTextFile, exec, notify } from "herdr";
 import { orderedGroup, orderedBySpace, reorderGroup, dragDecision, releaseTime, dropIndex, rowCenters, projectedPositions, persistOrder } from "./order.js";
-import { TodoStore, navigationPlan, agentIconState, todoBadge, modeAfterToggle, preserveSelection, applyModeAction, modeActions, subAgentState } from "./todo.js";
-import { modeHeader, todoBody, todoRefreshIcon, statusIcon } from "./todo-view.js";
-import { attentionText, displayName, validateName, validateEdit, tabSyncPlan, commitName, waitForTabName, focusIfOpen, autoNameCandidate, shouldAutoName } from "./names.js";
+import { groupRowItems, rowHint, TodoStore, navigationPlan, preserveSelection, applyModeAction } from "./todo.js";
+import { hintView, modeHeader, todoBody, todoRefreshIcon, statusIcon } from "./todo-view.js";
+import { displayName, validateName, validateEdit, tabSyncPlan, commitName, waitForTabName, focusIfOpen, autoNameCandidate, shouldAutoName } from "./names.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -51,7 +51,7 @@ function title(tab, l) {
   return (tab.name === prog || !tab.named) && telling ? live : tab.name;
 }
 const RANK = { blocked: 4, done: 3, working: 2, idle: 1 };
-const MODE_KEY = "agents-order.mode";
+
 const TODO_SELECT_KEY = "agents-order.todo.selected";
 // A sub-agent without a pane isn't in agents(): its raw word, error counting as
 // blocked. It's never done: it reports to its parent, and the parent's done is the news.
@@ -106,7 +106,7 @@ export default class Agents extends View {
     this.previews = new Map();
     this.error = "";
     this.focusHandle = cx.focus_handle();
-    this.mode = props()?.todoMode === "todo" || localStorage.getItem(MODE_KEY) === "todo" ? "todo" : "agents";
+    this.mode = props()?.todoMode === "todo" ? "todo" : "agents";
     this.todo = new TodoStore({ read: async () => readTextFile(this.todoPath()) });
     this.todoState = this.todo.state;
     this.todoSelected = localStorage.getItem(TODO_SELECT_KEY);
@@ -133,22 +133,26 @@ export default class Agents extends View {
   }
 
   modeHeaderView(t, sort) {
-    const badge = todoBadge(this.todoState);
+
     const sortButton = div().id("ag-sort").text_size(11).text_color(t.dim)
       .hover((s) => s.text_color(t.foreground))
       .on_click(() => openOverlay({ mod: "agents-order", kind: "popup", width: 200, height: 140, props: { sortMenu: true } }))
       .tooltip(`Sort agents: ${sort.label}`)
       .child(svg(`mods/workspace-chrome/${sort.icon}.svg`).size(14));
-    const actions = modeActions(this, (mode) => localStorage.setItem(MODE_KEY, mode), (cx) => this.refreshTodo(cx));
-    return modeHeader(t, this.mode, badge, {
-      agents: actions.agents,
-      todo: actions.todo,
-      right: this.mode === "agents" ? sortButton : todoRefreshIcon(t, actions.refresh),
-    });
+    const detail = this.mode === "todo";
+    return modeHeader(t, detail, cx => applyModeAction(this, "agents", cx),
+      detail ? todoRefreshIcon(t, cx => this.refreshTodo(cx)) : sortButton);
   }
 
-  switchMode(mode, cx) {
-    return applyModeAction(this, mode, cx, (next) => localStorage.setItem(MODE_KEY, next));
+  showItems(address, cx) {
+    this.detailAddress = address;
+    applyModeAction(this, "todo", cx);
+  }
+
+  hint(agent, compact = false) {
+    const items = this.rowItems.byAddress.get(agent.address) ?? [];
+    return hintView(theme(), rowHint(agent, items), items.length,
+      { id:agent.address, show:cx => this.showItems(agent.address, cx) }, compact);
   }
 
   refreshTodo(cx) {
@@ -266,11 +270,13 @@ export default class Agents extends View {
   }
 
   todoShell(t) {
+    const selectedItems = this.detailAddress === null ? this.rowItems.unlinked
+      : this.detailAddress ? this.rowItems.byAddress.get(this.detailAddress) ?? [] : this.todoState.items;
     return v_flex().relative().track_focus(this.focusHandle).size_full().min_h(0)
       .bg(t.chrome).border_t(1).border_color(t.border).text_size(13)
-      .when(!narrow(), (el) => el.child(this.modeHeaderView(t, sortOf())))
+      .child(this.modeHeaderView(t, sortOf()))
       .when(this.error, (el) => el.child(div().px(12).py(4).text_size(11).text_color(t.blocked).child(this.error)))
-      .child(todoBody(t, this.todoState, this.todoSelected, this.todoFailure,
+      .child(todoBody(t, { ...this.todoState, items:selectedItems }, this.todoSelected, this.todoFailure,
         (item, cx) => this.openTodo(item, cx), this.todoScroll))
       .when(narrow(), (el) => el.child(h_flex().h(28).items_center().justify_center()
         .child(div().id("collapse").text_size(13).text_color(t.dim).hover((s) => s.text_color(t.foreground))
@@ -648,7 +654,7 @@ export default class Agents extends View {
     });
   }
 
-  subRow(t, s, shown, compact) {
+  subRow(t, s, shown) {
     const k = s.t;
     const st = kidStatus(k, this.listed);
     const pic = icon(k.program, 14, t.foreground);
@@ -675,21 +681,7 @@ export default class Agents extends View {
         .text_color(on ? t.foreground : t.muted)
         .child(this.nameById?.get(k.address) || k.name || k.template || k.program?.name || k.address))
       .when(this.hovered === k.address, (el) => el.child(this.renameButton(k.address, t)))
-      .child(this.subStatus(t, k, st));
-  }
-
-  agentState(a) {
-    return agentIconState(a, this.todoState?.items ?? [], this.todoVerified ?? {});
-  }
-
-  // 子 Agent 用自身 address 关联事项，保留产品 icon/树结构，不串父行状态。
-  subStatus(t, k, st) {
-    return statusIcon(subAgentState(k, st, this.todoState?.items ?? [], this.todoVerified ?? {}), t);
-  }
-
-  // Agents 行与待办行复用同一套 14px 状态图标；图标只表达状态，不改排序。
-  status(t, a) {
-    return statusIcon(a?.address ? this.agentState(a) : a?.status, t);
+      .child(this.hint({ ...k, status:st }));
   }
 
   render(cx) {
@@ -710,6 +702,7 @@ export default class Agents extends View {
     // A kept sub-agent (one with a pane) is in agents() too: where a tree shows
     // it, it gets no row of its own, unless it's pinned.
     const nested = new Set(collapsed ? [] : list.flatMap((a) => this.tree(all, a.address).map((s) => s.t.address)));
+    this.rowItems = groupRowItems(this.todoState.items ?? [], new Set([...list.map(a => a.address), ...nested]), this.todoVerified);
     list = list.filter((a) => a.pinned || !nested.has(a.address));
     const tabCounts = new Map();
     for (const a of list) tabCounts.set(a.tab, (tabCounts.get(a.tab) ?? 0) + 1);
@@ -731,7 +724,7 @@ export default class Agents extends View {
       const subs = collapsed ? [] : this.tree(all, a.address);
       const r = row(a, i, subs, members);
       if (this.folded.has(a.address)) return [r];
-      return [r, ...subs.map((s) => this.subRow(t, s, shown, byPriority))];
+      return [r, ...subs.map((s) => this.subRow(t, s, shown))];
     };
 
     // The fold chevron; folded, the count too, colored by the most urgent one.
@@ -795,9 +788,9 @@ export default class Agents extends View {
           .hover((s) => s.bg(t.hover))
           .on_click(() => run("pane.focus", { pane: a.pane }))
           .child(div().flex_1().min_w(0).whitespace_nowrap().text_right().text_color(t.muted).child(String(i + 1)))
-          .child(h_flex().w(14).flex_none().items_center().justify_center().child(this.status(t, a, true)));
+          .child(h_flex().w(14).flex_none().items_center().justify_center().child(this.hint(a, true)));
       }
-      const attention = attentionText(a);
+      const attention = rowHint(a, this.rowItems.byAddress.get(a.address) ?? []).text;
       const when = this.since(a);
       const idle = a.status === "idle" && !a.focused;
       const isPinned = a.pinned;
@@ -862,9 +855,8 @@ export default class Agents extends View {
         .when(subs.length > 0, el => el.child(fold(a, subs)))
         .when(this.hovered === a.address, el => el.child(this.renameButton(a.address, t)))
         .when(this.hovered === a.address, el => el.child(pin))
-        .when(Boolean(attention), el => el.child(div().flex_none().text_size(11).text_color(t.blocked).child(attention)))
         .when(!attention && this.hovered !== a.address && Boolean(when), el => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - when))))
-        .child(this.status(t, a, byPriority && !isPinned));
+        .child(this.hint(a));
     };
 
     // Groups in list order: spaces (grouped) or priority sections. Agents of a
@@ -901,7 +893,7 @@ export default class Agents extends View {
         .when(byPriority || !open, (el) => el.child(div().text_color(t.dim).child(String(g.members.length))))
         .child(div().flex_1())
         .when(!open, (el) => el
-          .when(!byPriority && top && top !== "idle", (el) => el.child(this.status(t, { status: top }, true)))
+          .when(!byPriority && top && top !== "idle", (el) => el.child(statusIcon(top, t)))
           .child(svg("mods/workspace-chrome/chevron-right.svg").size(11).flex_none().text_color(t.dim)));
     };
     const groupRows = g => {
@@ -942,6 +934,11 @@ export default class Agents extends View {
       )
       .when(this.error, el => el.child(div().px(12).py(4).text_size(11).text_color(t.blocked).child(this.error)))
       .child(v_flex().id("ag-list").flex_1().min_h(0).px(collapsed ? 0 : 8).overflow_y_scrollbar().mode("always").children(rows))
+      .when(!collapsed && (this.rowItems.unlinked.length || this.todoState.errors?.length ||
+          ["error","stale","missing"].includes(this.todoState.kind)), el => el.child(
+        div().id("unlinked-items").px(16).py(4).text_size(12).text_color(t.muted).cursor_pointer()
+          .on_click((_e,cx) => this.showItems(null,cx))
+          .child(this.rowItems.unlinked.length ? "未关联事项 " + this.rowItems.unlinked.length : "事项读取异常")))
       .when(collapsed, (el) =>
         el.child(
           h_flex()

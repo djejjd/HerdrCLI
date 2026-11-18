@@ -131,10 +131,3 @@ export async function commitName({ label, address, name, currentName = '', syncT
     error: tabSyncFailed ? '任务名已保存，标签页名称未同步' : null,
   };
 }
-
-// Herdr 的 blocked 也可能是等待用户回复；只在有权限语义时显示待权限。
-export function attentionText(agent) {
-  if (agent?.status !== 'blocked') return '';
-  const permission = /^(?:[^\p{L}\p{N}]*)(?:permission required|approval required|awaiting approval|待权限|请求权限)(?:\b|[\s|｜:：]|$)/iu;
-  return permission.test(agent.title ?? '') ? '待权限' : '待处理';
-}

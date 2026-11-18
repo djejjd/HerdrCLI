@@ -412,3 +412,41 @@ export class TodoStore {
     this.inflight = null;
   }
 }
+
+// Herdr 的 blocked 也可能是等待用户回复；只在有权限语义时显示待权限。
+export function attentionText(agent) {
+  if (agent?.status !== 'blocked') return '';
+  const permission = /^(?:[^\p{L}\p{N}]*)(?:permission required|approval required|awaiting approval|待权限|请求权限)(?:\b|[\s|｜:：]|$)/iu;
+  return permission.test(agent.title ?? '') ? '待授权' : '待回应';
+}
+
+// 只把可归属到可见 Agent 树的事项放回行内；其余项保留统一入口。
+export function groupRowItems(items, addresses, verified = {}) {
+  const byAddress = new Map(), unlinked = [];
+  for (const item of items) {
+    const address = item.source?.terminal, session = item.source?.sessionId;
+    if (item.readOnly || !session || !addresses.has(address) || !ACTION_STATES.has(item.displayState)
+        || (verified[address] && verified[address] !== session)) {
+      unlinked.push(item);
+      continue;
+    }
+    if (!byAddress.has(address)) byAddress.set(address, []);
+    byAddress.get(address).push(item);
+  }
+  return { byAddress, unlinked };
+}
+
+export function rowHint(agent, items) {
+  const signals = new Set(items.map(item => {
+    if (item.displayState === 'needs_user') return item.kind === '授权' ? '待授权' : '待回应';
+    return { review:'待审', blocked:'待回应', operation:'' }[item.displayState] ?? '';
+  }));
+  const live = attentionText(agent);
+  if (live) signals.add(live);
+  const label = ['待授权','待回应','待审'].find(value => signals.has(value)) ?? '';
+  const icon = { '待授权':'permission', '待回应':'reply', '待审':'review' }[label]
+    ?? (signals.has('') || agent?.status === 'working' ? 'working' : 'idle');
+  let text = label;
+  if (items.length > 1) text = label && signals.size === 1 ? label + ' ' + items.length : items.length + ' 项';
+  return { text, icon };
+}

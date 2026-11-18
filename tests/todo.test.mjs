@@ -276,3 +276,19 @@ test('parent and child keep separate action states by address', () => {
   assert.equal(agentIconState({ address: 't2n', status: 'working' }, items, {}), 'review');
   assert.equal(subAgentState({ address: 't31' }, 'working', items, {}), 'blocked');
 });
+
+test('列表按会话归属分配事项，未关联和混合事项保留明细', async () => {
+  const { groupRowItems, rowHint } = await import('../mods/agents-order/todo.js');
+  const item = (displayState, kind = '', sessionId = 's') => ({displayState,kind,source:{terminal:'t1',sessionId}});
+  const review = item('review'), consent = item('needs_user','授权'), stale = item('review','','old');
+  const grouped = groupRowItems([review,consent,stale,{...review,readOnly:true}], new Set(['t1']), {t1:'s'});
+  assert.deepEqual(grouped.unlinked,[stale,{...review,readOnly:true}]);
+  assert.deepEqual(grouped.byAddress.get('t1'),[review,consent]);
+  assert.equal(rowHint({},[review,review]).text,'待审 2');
+  assert.equal(rowHint({},[review,consent]).text,'2 项');
+  assert.equal(rowHint({},[consent]).text,'待授权');
+  assert.equal(rowHint({},[item('needs_user','选择')]).text,'待回应');
+  assert.equal(rowHint({status:'working'},[]).text,'');
+  assert.equal(rowHint({status:'idle'},[]).text,'');
+  assert.equal(rowHint({status:'blocked',title:'Approval required'},[]).text,'待授权');
+});
