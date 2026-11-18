@@ -146,3 +146,12 @@ test('manual rename writes source=manual so later scans cannot overwrite', async
   assert.equal(result.ok, true);
   assert.deepEqual(writes[0], { 'workbench.name': '人工新名', 'workbench.name.source': 'manual' });
 });
+
+test('审批标题保留任务名，通用阻塞单独显示', async () => {
+  const { attentionText } = await import('../mods/agents-order/names.js');
+  assert.equal(autoNameFromTitle('Action Required | 评估界面','Codex'), '评估界面');
+  assert.equal(autoNameFromTitle('Action Required','Codex'), null);
+  assert.equal(attentionText({status:'blocked',title:'Permission required'}), '待权限');
+  assert.equal(attentionText({status:'blocked',title:'问题待回复'}), '待处理');
+  assert.equal(attentionText({status:'working',title:'Permission required'}), '');
+});

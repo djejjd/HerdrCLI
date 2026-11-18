@@ -35,6 +35,8 @@ export function autoNameFromTitle(title, program = '', cwd = '', address = '') {
   s = s.replace(/^(?:AGENT|OMP|OH-MY-PI|DS Harness|DeepSeek Harness|Codex|Claude|OpenCode|SPEC)\s*[:：>\-–—]\s*/iu, '');
   s = s.replace(/^(?:AGENT|OMP|OH-MY-PI|DS Harness|DeepSeek Harness|Codex|Claude|OpenCode|SPEC)\s+/iu, '');
   s = s.replace(/^[^\p{Script=Han}\p{Script=Latin}\p{N}]+/u, '').trim();
+  // 审批期间工具会把状态词放在任务名前；只有状态时沿用已有名称。
+  s = s.replace(/^(?:action required|approval required|permission required)(?:\s*[|｜:：]\s*|$)/i, '');
   const first = s.split(SEGMENT_RE)[0].trim();
   if (!first) return null;
   const candidate = truncateWords(first);
@@ -128,4 +130,11 @@ export async function commitName({ label, address, name, currentName = '', syncT
     tabSyncFailed,
     error: tabSyncFailed ? '任务名已保存，标签页名称未同步' : null,
   };
+}
+
+// Herdr 的 blocked 也可能是等待用户回复；只在有权限语义时显示待权限。
+export function attentionText(agent) {
+  if (agent?.status !== 'blocked') return '';
+  const permission = /^(?:[^\p{L}\p{N}]*)(?:permission required|approval required|awaiting approval|待权限|请求权限)(?:\b|[\s|｜:：]|$)/iu;
+  return permission.test(agent.title ?? '') ? '待权限' : '待处理';
 }

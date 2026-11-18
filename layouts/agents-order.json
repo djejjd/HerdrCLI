@@ -46,11 +46,11 @@
               "id": "spaces",
               "type": "block",
               "size": {
-                "weight": 1
+                "px": 176
               },
               "min": 90,
               "content": {
-                "mod": "spaces"
+                "mod": "compact-spaces"
               }
             },
             {
@@ -94,7 +94,7 @@
           },
           "window_drag": true,
           "content": {
-            "mod": "tabs"
+            "mod": "compact-tabs"
           }
         },
         {

@@ -6,7 +6,7 @@ import { agents, terminals, panes, focused, spaces, run, hc, theme, shared, setS
 import { orderedGroup, orderedBySpace, reorderGroup, dragDecision, releaseTime, dropIndex, rowCenters, projectedPositions, persistOrder } from "./order.js";
 import { TodoStore, navigationPlan, agentIconState, todoBadge, modeAfterToggle, preserveSelection, applyModeAction, modeActions, subAgentState } from "./todo.js";
 import { modeHeader, todoBody, todoRefreshIcon, statusIcon } from "./todo-view.js";
-import { displayName, validateName, validateEdit, tabSyncPlan, commitName, waitForTabName, focusIfOpen, autoNameCandidate, shouldAutoName } from "./names.js";
+import { attentionText, displayName, validateName, validateEdit, tabSyncPlan, commitName, waitForTabName, focusIfOpen, autoNameCandidate, shouldAutoName } from "./names.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -797,6 +797,7 @@ export default class Agents extends View {
           .child(div().flex_1().min_w(0).whitespace_nowrap().text_right().text_color(t.muted).child(String(i + 1)))
           .child(h_flex().w(14).flex_none().items_center().justify_center().child(this.status(t, a, true)));
       }
+      const attention = attentionText(a);
       const when = this.since(a);
       const idle = a.status === "idle" && !a.focused;
       const isPinned = a.pinned;
@@ -861,7 +862,8 @@ export default class Agents extends View {
         .when(subs.length > 0, el => el.child(fold(a, subs)))
         .when(this.hovered === a.address, el => el.child(this.renameButton(a.address, t)))
         .when(this.hovered === a.address, el => el.child(pin))
-        .when(this.hovered !== a.address && Boolean(when), el => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - when))))
+        .when(Boolean(attention), el => el.child(div().flex_none().text_size(11).text_color(t.blocked).child(attention)))
+        .when(!attention && this.hovered !== a.address && Boolean(when), el => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - when))))
         .child(this.status(t, a, byPriority && !isPinned));
     };
 
