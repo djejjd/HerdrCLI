@@ -44,3 +44,10 @@
 | 为什么这么定 | `docs/adr/` 新编号 |
 | 项目必须遵守的规则 | `docs/rules.md` |
 | 事故复盘 | `docs/quality/`（gitignore，不外传） |
+
+## HD-TODO-01 本 worktree 派工卡
+- 身份：DS待办执行(t31)，监督者(t2n)；用户批准方向见 PD-HERDR-002。
+- 唯一任务卡：`.tmp/collab/HD-TODO-01/assignment.md`，开工先读；方案与流程记录同目录。
+- 方案已通过：以 `.tmp/collab/HD-TODO-01/review-02-approved.md` 为本阶段可写范围及验收约束；先读该卡再实施，其他禁止项继续有效。
+- 禁止额外派工、越范围、覆盖用户改动、自动切焦点、永久部署、合并、推送和发布。
+- 每阶段交 `CARD`（证据命令与退出码/文件/截图、剩余裁决、下一步），用 `hc send t2n`；交卡后结束回合，不轮询。

@@ -1,9 +1,12 @@
 // Agents in grouped or priority views; parents take their most urgent sub-agent's place.
 
 import { View, div, image, svg } from "gpui-kit";
-import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, panes, focused, spaces, run, hc, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window as herdrWindow, layout } from "herdr";
+import { v_flex, h_flex, ScrollHandle, InputState, Input } from "gpui-base";
+import { agents, terminals, panes, focused, spaces, run, hc, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window as herdrWindow, layout, checking, home, appHome, readTextFile, exec, notify } from "herdr";
 import { orderedGroup, orderedBySpace, reorderGroup, dragDecision, releaseTime, dropIndex, rowCenters, projectedPositions, persistOrder } from "./order.js";
+import { TodoStore, navigationPlan, agentIconState, todoBadge, modeAfterToggle, preserveSelection, applyModeAction, modeActions, subAgentState } from "./todo.js";
+import { modeHeader, todoBody, todoRefreshIcon, statusIcon } from "./todo-view.js";
+import { displayName, validateName, validateEdit, tabSyncPlan, commitName, waitForTabName, focusIfOpen, autoNameCandidate, shouldAutoName } from "./names.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -48,6 +51,8 @@ function title(tab, l) {
   return (tab.name === prog || !tab.named) && telling ? live : tab.name;
 }
 const RANK = { blocked: 4, done: 3, working: 2, idle: 1 };
+const MODE_KEY = "agents-order.mode";
+const TODO_SELECT_KEY = "agents-order.todo.selected";
 // A sub-agent without a pane isn't in agents(): its raw word, error counting as
 // blocked. It's never done: it reports to its parent, and the parent's done is the news.
 const kidStatus = (k, listed) => {
@@ -79,6 +84,16 @@ function icon(p, size, color) {
 export default class Agents extends View {
   init(_props, cx) {
     if (props()?.sortMenu) return;
+    this.closed = false;
+    if (props()?.rename) {
+      this.handle = cx.focus_handle();
+      this.handle.focus();
+      this.renameBusy = false;
+      this.renameError = "";
+      this.renameClearConfirm = false;
+      this.initRename(cx);
+      return;
+    }
     this.folded = new Set();
     // Each agent's last state and when it changed (ms), kept across restarts.
     this.changed = JSON.parse(localStorage.getItem("changed") ?? "{}");
@@ -91,7 +106,342 @@ export default class Agents extends View {
     this.previews = new Map();
     this.error = "";
     this.focusHandle = cx.focus_handle();
+    this.mode = props()?.todoMode === "todo" || localStorage.getItem(MODE_KEY) === "todo" ? "todo" : "agents";
+    this.todo = new TodoStore({ read: async () => readTextFile(this.todoPath()) });
+    this.todoState = this.todo.state;
+    this.todoSelected = localStorage.getItem(TODO_SELECT_KEY);
+    this.todoFailure = null;
+    this.todoReading = false;
+    this.todoClickSeq = 0;
+    this.todoNavTimer = null;
+    this.todoVerified = {};
+    this.todoScroll = ScrollHandle.new();
+    this.autoNamePending = new Set();
+    this.autoNameTries = new Map();
+    this.autoNameBlocked = new Set();
     cx.timer.every(30000, (cx) => cx.notify());
+    if (!checking()) {
+      this.todoTimer = cx.timer.every(2000, (cx) => this.refreshTodo(cx));
+      this.refreshTodo(cx);
+    }
+  }
+
+  todoPath() {
+    const fixture = props()?.todoFixture;
+    if (typeof fixture === "string" && (fixture.startsWith("/tmp/") || fixture.startsWith("/private/tmp/"))) return fixture;
+    return `${home()}/ai/collab/pending.md`;
+  }
+
+  modeHeaderView(t, sort) {
+    const badge = todoBadge(this.todoState);
+    const sortButton = div().id("ag-sort").text_size(11).text_color(t.dim)
+      .hover((s) => s.text_color(t.foreground))
+      .on_click(() => openOverlay({ mod: "agents-order", kind: "popup", width: 200, height: 140, props: { sortMenu: true } }))
+      .tooltip(`Sort agents: ${sort.label}`)
+      .child(svg(`mods/workspace-chrome/${sort.icon}.svg`).size(14));
+    const actions = modeActions(this, (mode) => localStorage.setItem(MODE_KEY, mode), (cx) => this.refreshTodo(cx));
+    return modeHeader(t, this.mode, badge, {
+      agents: actions.agents,
+      todo: actions.todo,
+      right: this.mode === "agents" ? sortButton : todoRefreshIcon(t, actions.refresh),
+    });
+  }
+
+  switchMode(mode, cx) {
+    return applyModeAction(this, mode, cx, (next) => localStorage.setItem(MODE_KEY, next));
+  }
+
+  refreshTodo(cx) {
+    if (this.closed || this.todoReading) return;
+    this.todoReading = true;
+    const pending = this.todo.refresh();
+    cx.spawn(async (cx) => {
+      try { await pending; } catch { /* TodoStore 已把读取失败落成 error/stale。 */ }
+      this.todoReading = false;
+      if (this.closed) return;
+      this.todoState = this.todo.state;
+      this.todoSelected = preserveSelection(this.todoSelected, this.todoState.items);
+      if (this.todoSelected) localStorage.setItem(TODO_SELECT_KEY, this.todoSelected);
+      else localStorage.removeItem(TODO_SELECT_KEY);
+      cx.notify();
+    });
+  }
+
+  verifyTodoSource(item) {
+    if (!item?.source?.sessionId) return Promise.resolve({ ok: false, reason: "unverified" });
+    return exec("node", [appHome() + "/mods/agents-order/session.mjs", "verify", item.source.terminal, item.source.sessionId], { timeout: 5000 })
+      .then((r) => {
+        try { return JSON.parse(r.stdout); } catch { return { ok: false, reason: "verify-output" }; }
+      })
+      .catch(() => ({ ok: false, reason: "verify-timeout" }));
+  }
+
+  navReason(reason) {
+    return {
+      source_closed: "来源终端已关闭，事项保留",
+      source_changed: "来源身份已变化，事项保留",
+      session_changed: "来源会话已变化，事项保留",
+      session_unverified: "无法核验来源会话，事项保留",
+      source_missing: "来源未记录，无法精确打开",
+      unresolvable: "冲突/只读事项，无法打开",
+    }[reason] ?? `无法打开：${reason ?? "未知原因"}`;
+  }
+
+  openTodo(item, cx) {
+    if (this.drag) return;
+    this.todoSelected = item.id;
+    this.todoFailure = null;
+    if (item.conflict || item.legacy || item.versionError) {
+      this.todoFailure = { id: item.id, reason: item.conflict ? "冲突记录，需监督方修正" : "缺少稳定 ID/版本，无法跳转" };
+      cx.notify();
+      return;
+    }
+    if (!item.source?.sessionId) {
+      this.todoFailure = { id: item.id, reason: this.navReason("session_unverified") };
+      cx.notify();
+      return;
+    }
+    const seq = ++this.todoClickSeq;
+    const rev = item.rev;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      const identity = await this.verifyTodoSource(item);
+      if (this.closed || seq !== this.todoClickSeq) return;
+      const current = (this.todoState.items ?? []).find(i => i.id === item.id);
+      if (!current || current.rev !== rev) {
+        this.todoFailure = { id: item.id, reason: "事项已变化，请重试" };
+        cx.notify();
+        return;
+      }
+      if (!identity.ok) {
+        this.todoFailure = { id: item.id, reason: this.navReason(identity.reason) };
+        cx.notify();
+        return;
+      }
+      const plan = navigationPlan(current, { terminals: terminals(), panes: panes(), spaces: spaces(), focused: focused() }, identity);
+      if (!plan.ok) {
+        this.todoFailure = { id: item.id, reason: this.navReason(plan.reason) };
+        cx.notify();
+        return;
+      }
+      this.todoVerified[current.source.terminal] = identity.sessionId;
+      try {
+        for (const step of plan.steps) run(step.name, step.args);
+        this.todoFailure = null;
+      } catch {
+        this.todoFailure = { id: item.id, reason: "导航命令失败，事项保留" };
+      }
+      cx.notify();
+      if (plan.kind !== "pane") this.watchTodoNavigation(current, seq, cx);
+    });
+  }
+
+  watchTodoNavigation(item, seq, cx) {
+    this.todoNavTimer?.cancel();
+    let ticks = 0;
+    this.todoNavTimer = cx.timer.every(200, (cx) => {
+      if (this.closed || seq !== this.todoClickSeq) {
+        this.todoNavTimer?.cancel();
+        this.todoNavTimer = null;
+        return;
+      }
+      ticks += 1;
+      const f = focused();
+      const terminal = item.source.terminal;
+      const ok = f?.shown === terminal || f?.terminal === terminal || panes().some(p => p.terminal === terminal);
+      if (ok) {
+        this.todoNavTimer?.cancel();
+        this.todoNavTimer = null;
+        this.todoFailure = null;
+        cx.notify();
+        return;
+      }
+      if (ticks >= 10) {
+        this.todoNavTimer?.cancel();
+        this.todoNavTimer = null;
+        this.todoFailure = { id: item.id, reason: "导航未确认：目标未出现" };
+        cx.notify();
+      }
+    });
+  }
+
+  todoShell(t) {
+    return v_flex().relative().track_focus(this.focusHandle).size_full().min_h(0)
+      .bg(t.chrome).border_t(1).border_color(t.border).text_size(13)
+      .when(!narrow(), (el) => el.child(this.modeHeaderView(t, sortOf())))
+      .when(this.error, (el) => el.child(div().px(12).py(4).text_size(11).text_color(t.blocked).child(this.error)))
+      .child(todoBody(t, this.todoState, this.todoSelected, this.todoFailure,
+        (item, cx) => this.openTodo(item, cx), this.todoScroll))
+      .when(narrow(), (el) => el.child(h_flex().h(28).items_center().justify_center()
+        .child(div().id("collapse").text_size(13).text_color(t.dim).hover((s) => s.text_color(t.foreground))
+          .on_click(toggleSidebar).child("»"))));
+  }
+
+  writeLabel(address, values) {
+    return hc(["label", address, ...Object.entries(values).map(([k, v]) => `${k}=${v}`)])
+      .then(r => { if (r.code !== 0) throw new Error("label write failed"); return r; });
+  }
+
+  // 现有 live Agent 的标题清洗；人工名/未知标题不写，失败最多重试两次。
+  scanAutoNames(all, cx) {
+    if (checking() || this.closed) return;
+    for (const a of agents()) {
+      if (this.autoNamePending.has(a.address) || this.autoNameBlocked.has(a.address)) continue;
+      const tries = this.autoNameTries.get(a.address) ?? 0;
+      if (tries >= 2) continue;
+      const term = all.find(t => t.address === a.address);
+      if (!term || term.state !== "live") continue;
+      const candidate = autoNameCandidate({
+        labels: term.labels ?? {}, title: a.title, program: a.program?.name,
+        cwd: term.cwd, address: a.address,
+      });
+      if (!candidate) continue;
+      this.autoNamePending.add(a.address);
+      cx.spawn(async (cx) => {
+        try {
+          const current = terminals().find(t => t.address === a.address);
+          if (!current || !shouldAutoName(current.labels ?? {}) || this.autoNameBlocked.has(a.address)) return;
+          await this.writeLabel(a.address, { "workbench.name": candidate.name, "workbench.name.source": "auto" });
+        } catch {
+          this.autoNameTries.set(a.address, (this.autoNameTries.get(a.address) ?? 0) + 1);
+        } finally {
+          this.autoNamePending.delete(a.address);
+          if (!this.closed) cx.notify();
+        }
+      });
+    }
+  }
+
+  initRename(cx) {
+    const name = props().name ?? "";
+    this.input = InputState.new({ value: name });
+    if (name) this.input.set_selected_range({ start: 0, end: name.length });
+    this.inputFocused = true;
+    this.input.on("change", (_e, cx) => { this.renameError = ""; this.renameClearConfirm = false; cx.notify(); });
+    this.input.on("focus", (_e, cx) => { this.inputFocused = true; cx.notify(); });
+    this.input.on("blur", (_e, cx) => { this.inputFocused = false; cx.notify(); });
+    this.input.on("submit", (_e, cx) => this.saveName(cx));
+    this.input.focus();
+    this.renameFocusTimer = cx.timer.after(600, () => {
+      focusIfOpen(this.closed, () => this.input.focus());
+    });
+  }
+
+  saveName(cx) {
+    if (this.renameBusy) return;
+    const p = props(), name = this.input.value().trim();
+    if (!name && !this.renameClearConfirm) {
+      this.renameClearConfirm = true;
+      this.renameError = "";
+      cx.notify();
+      return;
+    }
+    if (name) {
+      const error = validateEdit(p.name ?? "", name, p.siblings ?? []);
+      if (error) { this.renameError = error; cx.notify(); return; }
+    }
+    this.renameBusy = true;
+    this.renameError = "";
+    cx.notify();
+    cx.spawn(async (cx) => {
+      const result = await commitName({
+        address: p.address,
+        name,
+        currentName: p.name ?? "",
+        source: "manual",
+        label: async (address, values) => {
+          const r = await hc(["label", address, ...Object.entries(values).map(([k, v]) => `${k}=${v}`)]);
+          if (r.code !== 0) throw new Error("label write failed");
+        },
+        syncTab: async (next) => this.syncTab(p.address, next, cx),
+      });
+      this.renameBusy = false;
+      if (this.closed) return;
+      if (!result.ok) {
+        this.renameError = result.error;
+        cx.notify();
+        return;
+      }
+      this.autoNameBlocked.add(p.address);
+      if (result.tabSyncFailed) notify({ title: "任务名已保存", body: "标签页名称未同步", level: "warning" });
+      closeOverlay(p.overlay);
+      cx.notify();
+    });
+  }
+
+  waitRename(cx, ms = 80) {
+    if (this.closed) return Promise.resolve();
+    return new Promise((resolve) => {
+      let handle;
+      const finish = () => {
+        this.renameWaitTimers.delete(handle);
+        this.renameWaitResolvers.delete(finish);
+        resolve();
+      };
+      handle = cx.timer.after(ms, finish);
+      this.renameWaitTimers.add(handle);
+      this.renameWaitResolvers.add(finish);
+    });
+  }
+
+  async syncTab(address, name, cx) {
+    const plan = tabSyncPlan(panes(), agents().find(a => a.address === address), name);
+    if (!plan) return;
+    run("tab.rename", plan);
+    // run 没有回执：有界等待宿主回显，区分“快照稍后更新”与真正未生效。
+    const result = await waitForTabName({
+      plan, name,
+      read: (id) => spaces().flatMap(s => s.tabs ?? []).find(t => t.id === id),
+      wait: () => this.waitRename(cx),
+    });
+    if (!result.ok) throw new Error("tab rename not echoed");
+  }
+
+  renameButton(address, t) {
+    return h_flex().id(`rename-${address}`).w(16).h(16).flex_none().items_center().justify_center()
+      .text_color(t.dim).opacity(1).tooltip("修改任务名").cursor_pointer()
+      .on_click((_e, cx) => { cx.stop_propagation(); this.renameByAddress(address); })
+      .child(svg("mods/agents-order/pencil.svg").size(14).text_color(t.dim));
+  }
+
+  renameByAddress(address) {
+    const all = terminals();
+    const info = agents().find(a => a.address === address);
+    const term = all.find(t => t.address === address);
+    const stored = displayName(term?.labels ?? {}, "");
+    const fallback = term?.name || term?.template || term?.program?.name || term?.address || "";
+    const name = stored || fallback;
+    const parentSpace = term?.parent ? agents().find(a => a.address === term.parent)?.space : null;
+    const space = info?.space || term?.labels?.["herdr.space"] || parentSpace;
+    const siblings = [
+      ...agents().filter(a => a.address !== address && (!space || a.space === space))
+        .map(a => this.nameById?.get(a.address) || a.name || a.program?.name || ""),
+      ...all.filter(t => t.address !== address && t.parent && (!space || agents().find(a => a.address === t.parent)?.space === space))
+        .map(t => this.nameById?.get(t.address) || t.name || t.program?.name || ""),
+    ].filter(Boolean);
+    openOverlay({ mod: "agents-order", kind: "dialog", width: 340, props: { rename: true, address, name, siblings } });
+  }
+
+  renameView() {
+    const t = theme(), p = props(), busy = this.renameBusy;
+    const button = (id, text, primary, action) => h_flex().id(id).h(28).px(10).items_center().rounded(6)
+      .border_1().border_color(primary ? t.solid : t.input).bg(primary ? t.solid : t.raised)
+      .text_color(primary ? t.solid_foreground : t.foreground).text_size(11.5).font_medium().cursor_pointer()
+      .hover(s => s.opacity(0.88)).on_click(action).child(text);
+    return v_flex().id("rename-dialog").w_full().bg(t.popover).text_color(t.foreground)
+      .track_focus(this.handle)
+      .child(v_flex().p(14)
+        .child(h_flex().items_center()
+          .child(div().flex_1().text_size(13.5).font_semibold().child("修改任务名"))
+          .child(div().text_size(10.5).text_color(t.dim).child("Esc")))
+        .child(div().pt(3).text_size(10.5).text_color(t.dim).child("同一 Space 内不能重名；留空需再次确认清空"))
+        .child(Input.new(this.input).h(32).px(9).rounded(7).text_size(12.5)
+          .border_1().border_color(this.inputFocused ? t.accent : t.input).bg(t.background).text_color(t.foreground))
+        .child(div().pt(6).h(16).text_size(10.5).text_color(this.renameError ? t.blocked : t.dim)
+          .child(this.renameError || (this.renameClearConfirm ? "再次点击“确认清空”将移除任务名" : "")))
+        .child(h_flex().pt(6).gap(6).items_center().justify_end()
+          .child(button("cancel-name", "取消", false, () => closeOverlay(p.overlay)))
+          .child(busy ? button("save-name", "保存中…", true, () => {}) : button("save-name", this.renameClearConfirm ? "确认清空" : "保存", true, (_e, cx) => this.saveName(cx)))));
   }
 
   // Stamps agents whose state changed. Done and idle count as one: looking at a
@@ -238,8 +588,19 @@ export default class Agents extends View {
   }
 
   close() {
+    this.closed = true;
+    this.renameFocusTimer?.cancel();
+    for (const handle of this.renameWaitTimers ?? []) handle?.cancel?.();
+    for (const resolve of this.renameWaitResolvers ?? []) resolve();
+    this.renameWaitTimers?.clear();
+    this.renameWaitResolvers?.clear();
     this.dragTimer?.cancel();
     this.dragTimer = null;
+    this.todoTimer?.cancel();
+    this.todoNavTimer?.cancel();
+    this.todoNavTimer = null;
+    this.todo?.close();
+    try { this.todoScroll?.release(); } catch { /* 已释放 */ }
     this.drag = null;
     this.previews?.clear();
   }
@@ -304,34 +665,44 @@ export default class Agents extends View {
       .text_size(12.5)
       .when(on, (el) => el.bg(t.raised))
       .hover((s) => s.bg(t.hover))
+      .on_hover((active, cx) => { this.hovered = active ? k.address : (this.hovered === k.address ? null : this.hovered); cx.notify(); })
       .on_click(() => (this.listed.has(k.address) ? run("pane.focus", { terminal: k.address }) : this.peek(k.address)))
       .children(s.lines.map(l => div().self_start().mt(-4).w(9).h(17).mr(4).flex_none()
         .when(Boolean(l), el => el.border_l(1.5).border_color(t.input))
         .when(l === "└" || l === "├", el => el.border_b(1.5).rounded_bl(6))))
       .when(Boolean(pic), el => el.child(div().mr(8).child(pic)))
-      .child(div().flex_1().truncate().text_color(on ? t.foreground : t.muted).child(k.name || k.template || k.program?.name || k.address))
-      .child(this.status(t, { status: st }, compact));
+      .child(div().flex_1().min_w(0).truncate().tooltip(this.nameById?.get(k.address) || k.name || k.template || k.program?.name || k.address)
+        .text_color(on ? t.foreground : t.muted)
+        .child(this.nameById?.get(k.address) || k.name || k.template || k.program?.name || k.address))
+      .when(this.hovered === k.address, (el) => el.child(this.renameButton(k.address, t)))
+      .child(this.subStatus(t, k, st));
   }
 
-  // compact: a ! for blocked where a header already says "Needs you".
-  status(t, a, compact = false) {
-    const color = t[a.status] ?? t.dim;
-    if (a.status === "working") return svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.working).spin(900);
-    if (a.status === "blocked" && compact) return div().size(14).flex_none().rounded(4).bg(t.blocked + "26").text_size(10.5).font_bold().text_color(t.blocked).flex().items_center().justify_center().child("!");
-    if (a.status === "blocked") return div().flex_none().px(6).h(18).rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).flex().items_center().child("Needs you");
-    // Idle: a ring; done: a dot.
-    if (a.status === "idle") return div().size(7).mx(3).flex_none().rounded(4).border(1.5).border_color(t.idle ?? t.dim);
-    return div().size(7).mx(3).flex_none().rounded(4).bg(a.status === "done" ? color : t.dim + "00");
+  agentState(a) {
+    return agentIconState(a, this.todoState?.items ?? [], this.todoVerified ?? {});
+  }
+
+  // 子 Agent 用自身 address 关联事项，保留产品 icon/树结构，不串父行状态。
+  subStatus(t, k, st) {
+    return statusIcon(subAgentState(k, st, this.todoState?.items ?? [], this.todoVerified ?? {}), t);
+  }
+
+  // Agents 行与待办行复用同一套 14px 状态图标；图标只表达状态，不改排序。
+  status(t, a) {
+    return statusIcon(a?.address ? this.agentState(a) : a?.status, t);
   }
 
   render(cx) {
     const t = theme();
     if (props()?.sortMenu) return this.sortMenu(t);
+    if (props()?.rename) return this.renameView();
     const collapsed = narrow();
     const sort = sortOf();
     let list = agents();
     this.listed = new Map(list.map((a) => [a.address, a.status]));
     const all = terminals();
+    this.nameById = new Map(all.map(t => [t.address, displayName(t.labels ?? {}, "")]));
+    if (!checking()) this.scanAutoNames(all, cx);
     this.migratePins(all);
     const shown = focused()?.agent;
     const now = Date.now();
@@ -354,6 +725,7 @@ export default class Agents extends View {
     const rest = list.filter((a) => !a.pinned);
     list = [...pinned, ...rest];
     setAgentOrder(list.map((a) => a.address));
+    if (this.mode === "todo") return this.todoShell(t);
 
     const withKids = (a, i, members) => {
       const subs = collapsed ? [] : this.tree(all, a.address);
@@ -448,7 +820,9 @@ export default class Agents extends View {
       // Under a space header the space goes without saying; an automatic tab number says nothing.
       // Without a space header above (priority, pinned) the row names its space.
       const full = byPriority || isPinned;
-      const name = full ? a.space_name || label(a) : more ?? (/^\d+$/.test(label(a)) ? a.program?.name || label(a) : label(a));
+      const storedName = this.nameById?.get(a.address) || "";
+      const fallbackName = full ? a.space_name || label(a) : more ?? (/^\d+$/.test(label(a)) ? a.program?.name || label(a) : label(a));
+      const name = storedName || fallbackName;
       return h_flex()
         .id(`ag-${a.address}`)
         .px(8)
@@ -481,10 +855,11 @@ export default class Agents extends View {
             cx.notify();
           })).child(pic)))
         .child(h_flex().flex_1().min_w(0).gap(5).items_center()
-          .child(div().min_w(0).max_w(full && more ? 120 : 200).truncate().text_color(idle ? t.muted : t.foreground).child(name))
+          .child(div().min_w(0).max_w(full && more ? 120 : 200).truncate().tooltip(name).text_color(idle ? t.muted : t.foreground).child(name))
           .when(full && Boolean(more), el => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(`\u00b7 ${more}`))))
         .when(Boolean(machine), el => el.child(div().text_size(10).text_color(t.dim).child(machine)))
         .when(subs.length > 0, el => el.child(fold(a, subs)))
+        .when(this.hovered === a.address, el => el.child(this.renameButton(a.address, t)))
         .when(this.hovered === a.address, el => el.child(pin))
         .when(this.hovered !== a.address && Boolean(when), el => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - when))))
         .child(this.status(t, a, byPriority && !isPinned));
@@ -559,29 +934,7 @@ export default class Agents extends View {
       .border_t(1)
       .border_color(t.border)
       .text_size(13)
-      .when(!collapsed, (el) =>
-        el.child(
-          h_flex()
-            .px(16)
-            .h(41)
-            .pt(14)
-            .pb(5)
-            .flex_none()
-            .items_center()
-            .justify_between()
-            .child(div().text_size(11.5).font_medium().text_color(t.dim).child("Agents"))
-            .child(
-              div()
-                .id("ag-sort")
-                .text_size(11)
-                .text_color(t.dim)
-                .hover((s) => s.text_color(t.foreground))
-                .on_click(() => openOverlay({ mod: "agents-order", kind: "popup", width: 200, height: 140, props: { sortMenu: true } }))
-                .tooltip(`Sort agents: ${sort.label}`)
-                .child(svg(`mods/workspace-chrome/${sort.icon}.svg`).size(14)),
-            ),
-        ),
-      )
+      .when(!collapsed, (el) => el.child(this.modeHeaderView(t, sort)))
       .when(list.length === 0 && !collapsed, (el) =>
         el.child(div().px(12).text_size(12).text_color(t.dim).child("No agent status yet. Agents show up here when they report their status. Older versions and agents inside tmux may not.")),
       )
