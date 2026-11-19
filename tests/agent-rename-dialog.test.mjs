@@ -70,3 +70,14 @@ test('弹窗在标签回显前关闭，侧栏复查延迟回显和超时', async
     assert.equal(warnings.length,Number(timeout));
   }
 });
+
+test('右键弹窗独立读取同一工作区已有名称', () => {
+  let request;
+  const d = dialog(async () => ({code:0}), {
+    terminals: () => [{address:'other',labels:{'workbench.name':'已占用'}}],
+    agents: () => ['a','other'].map(address => ({address,space:'space1',program:{name:'Codex'}})),
+    openOverlay: spec => { request = spec.props; },
+  });
+  d.view.renameByAddress('a');
+  assert.equal(names.validateEdit('', '已占用', request.siblings),'当前 Space 已有同名任务');
+});

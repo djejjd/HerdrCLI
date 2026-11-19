@@ -463,11 +463,12 @@ export default class Agents extends View {
     const name = stored || fallback;
     const parentSpace = term?.parent ? agents().find(a => a.address === term.parent)?.space : null;
     const space = info?.space || term?.labels?.["herdr.space"] || parentSpace;
+    const storedNames = new Map(all.map(t => [t.address, displayName(t.labels ?? {}, "")]));
     const siblings = [
       ...agents().filter(a => a.address !== address && (!space || a.space === space))
-        .map(a => this.nameById?.get(a.address) || a.name || a.program?.name || ""),
+        .map(a => storedNames.get(a.address) || a.name || a.program?.name || ""),
       ...all.filter(t => t.address !== address && t.parent && (!space || agents().find(a => a.address === t.parent)?.space === space))
-        .map(t => this.nameById?.get(t.address) || t.name || t.program?.name || ""),
+        .map(t => storedNames.get(t.address) || t.name || t.program?.name || ""),
     ].filter(Boolean);
     openOverlay({ mod: "agents-order", kind: "dialog", width: 340, props: { rename: true, address, name, siblings } });
   }
