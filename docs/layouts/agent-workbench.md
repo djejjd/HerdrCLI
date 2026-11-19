@@ -30,7 +30,7 @@
 | `agent-workbench` | 仓内 `mods/` | 单段 Agent 侧栏 |
 | `workbench-tabs` | 仓内 `mods/` | 标签栏 |
 | `workbench-pane` | 仓内 `mods/` | 终端面板 |
-| `notify` `notify-toast` | 仓内 `mods/` | 通知与 toast |
+| `notify` `notify-toast` | 仓内 `mods/` | 通知与 toast；`notify-toast` 由布局根部的 `toast` 键绑定，不是区块 |
 | `workspace-chrome` | 仓内 `mods/` | 品牌位与页脚 |
 | `files` `changes` `workspace-status` | 宿主内置 | 右侧面板与状态栏 |
 

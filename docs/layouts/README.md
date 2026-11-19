@@ -12,10 +12,10 @@
 
 | 布局 | 形态 | 侧栏 | 标签栏 | 右侧面板 | 外观 | 仓库内依赖 | 适合 |
 |---|---|---|---|---|---|---|---|
-| [agents-order](agents-order.md) | 树形侧栏 + 溢出标签 | 文件树（机器/Space/Agent） | `compact-tabs` | 文件 + 变更 | `paper`/`graphite` | `agents-order` `compact-tabs` `compact-spaces` `workspace-chrome` | 日常开发，当前启用 |
+| [agents-order](agents-order.md) | 树形侧栏 + 溢出标签 | 文件树（机器/Space/Agent） | `compact-tabs` | 文件 + 变更 | `paper`/`graphite` | `agents-order` `compact-tabs` `workspace-chrome`；管理弹窗另需 `compact-spaces` | 日常开发，当前启用 |
 | [main](main.md) | 上游默认 | `spaces` + `agents` 两段 | `tabs` | 文件 + 变更 | `paper`/`graphite` | `workspace-chrome` | 回退、对照基准 |
 | [verified-main](verified-main.md) | 同 `main`，标签换验证版 | `spaces` + `agents` | `verified-tabs` | 文件 + 变更 | `paper`/`graphite` | `workspace-chrome` | 标签行为对照验证 |
-| [agent-workbench](agent-workbench.md) | 工作台式 | `agent-workbench` 单段 | `workbench-tabs` | 文件 + 变更 | `paper`/`graphite` | `agent-workbench` `workbench-tabs` `workbench-pane` `notify` `notify-toast` `workspace-chrome` | 需要工作台式分栏 |
+| [agent-workbench](agent-workbench.md) | 工作台式 | `agent-workbench` 单段 | `workbench-tabs` | 文件 + 变更 | `paper`/`graphite` | `agent-workbench` `workbench-tabs` `workbench-pane` `notify` `workspace-chrome`；`toast` 键绑定 `notify-toast` | 需要工作台式分栏 |
 | [terminals](terminals.md) | 纯终端 | 无 | `terminals-bar` | 无 | `graphite`（固定深色） | 无（全为宿主内置） | 只要终端、不要侧栏 |
 | [win98](win98.md) | 主题外壳 | 由外壳承担 | 由外壳承担 | 由外壳承担 | `win98`（`#008080`） | 无（宿主内置） | 主题试验，不作日常 |
 | [flockbook](flockbook.md) | 主题外壳 | 由外壳承担 | 由外壳承担 | 由外壳承担 | `flockbook` / `flockbook-light` | 无（**未入仓**，本机专有） | 单色风格试验 |
@@ -42,9 +42,12 @@ herdr-app status
 | 层 | 位置 | 说明 |
 |---|---|---|
 | 仓内 mod | `mods/` → `~/.config/herdr-app/mods/` | 随仓库分发，`rsync` 后可用 |
-| 宿主内置 mod | 仅 `~/.config/herdr-app/mods/`，不在仓库 | `spaces` `agents` `tabs` `verified-tabs` `files` `changes` `pane` `workspace-status` `terminals-bar` `terminals-pane` `win98` `flockbook` 等 |
+| 宿主内置 mod | 仅 `~/.config/herdr-app/mods/`，不在仓库 | `spaces` `agents` `tabs` `verified-tabs` `files` `changes` `pane` `workspace-status` `terminals-bar` `terminals-pane` `win98` 等 |
 
 布局引用的 mod 只要有一层缺失，就视为前提不满足：不要启用，先补齐或改用其他布局。
+「引用」按 JSON 实际绑定计算，既包括区块的 `content.mod`，也包括 `toast` 这类按角色绑定的键；
+仅由某功能在读时打开的弹层（如 `compact-spaces`）不计入布局引用，单列为功能依赖。
+
 仓库 `mods/` 只覆盖仓内那 10 个（`agent-workbench` `agents-order` `compact-spaces` `compact-tabs`
 `notify` `notify-toast` `workbench-menu` `workbench-pane` `workbench-tabs` `workspace-chrome`），
 单靠仓库无法复现依赖宿主内置 mod 的布局。
@@ -59,7 +62,7 @@ herdr-app status
 ## 五、选型建议
 
 - 日常开发：`agents-order`——侧栏是文件树，标签溢出可点选，右侧常驻文件与变更。
-- 出问题回退：`main`——只用宿主内置 mod，依赖最少。
+- 出问题回退：`main`——仓内依赖只有 `workspace-chrome`，面最小。
 - 改标签行为：`verified-main` 与 `main` 并排对照。
 - 需要固定右侧面板做工作台：`agent-workbench`。
 - 只开终端：`terminals`。

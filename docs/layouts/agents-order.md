@@ -29,7 +29,7 @@
 |---|---|---|
 | `agents-order` | 仓内 `mods/` | 侧栏树、待办行内状态、改名 |
 | `compact-tabs` | 仓内 `mods/` | 标签溢出与下拉 |
-| `compact-spaces` | 仓内 `mods/` | 机器 / Space 管理弹窗 |
+| `compact-spaces` | 仓内 `mods/` | 管理弹窗（功能依赖，布局 JSON 不引用，不占区域） |
 | `workspace-chrome` | 仓内 `mods/` | 品牌位与页脚 |
 | `files` `changes` `pane` `workspace-status` | 宿主内置 | 右侧面板、终端、状态栏 |
 
@@ -55,4 +55,4 @@ herdr-app status   # errors: []
 - 适合：日常开发、需要看文件/变更、Space 与 Agent 数量多。
 - 不适合：不需要侧栏（改用 `terminals`）、只想要上游原样（改用 `main`）。
 - 单机（无远程机器）时侧栏不出现机器行，新建 Space 从「管理」弹窗进入。
-- 依赖仓内 4 个 mod；缺少任一 mod 时不要启用，先 `rsync` 补齐。
+- 仓内依赖：3 个布局 mod（`agents-order` `compact-tabs` `workspace-chrome`）+ 1 个功能依赖（`compact-spaces`，管理弹窗）；缺少任一 mod 时不要启用，先 `rsync` 补齐。
