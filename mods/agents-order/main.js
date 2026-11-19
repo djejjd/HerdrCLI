@@ -8,7 +8,10 @@ import { machines, agents, terminals, panes, focused, spaces, run, hc, theme, sh
 import { showGrip, orderedGroup, orderedBySpace, reorderGroup, dragDecision, releaseTime, dropIndex, rowCenters, projectedPositions, persistOrder } from "./order.js";
 import { groupRowItems, rowHint, TodoStore, navigationPlan, preserveSelection, applyModeAction } from "./todo.js";
 import { hintView, modeHeader, todoBody, todoRefreshIcon, statusIcon } from "./todo-view.js";
-import { displayName, validateName, validateEdit, tabSyncPlan, commitName, waitForTabName, focusIfOpen, autoNameCandidate, shouldAutoName } from "./names.js";
+import { displayName, validateName, validateEdit, tabSyncPlan, commitName, focusIfOpen, autoNameCandidate, shouldAutoName } from "./names.js";
+
+const TAB_ECHOES = "agents.rename.pendingTabEchoes";
+const warnTabSync = () => notify({title:"任务名已保存", body:"标签页名称未同步", level:"warning"});
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -127,7 +130,6 @@ export default class Agents extends View {
     this.todoScroll = ScrollHandle.new();
     this.autoNamePending = new Set();
     this.autoNameTries = new Map();
-    this.autoNameBlocked = new Set();
     cx.timer.every(30000, (cx) => cx.notify());
     if (!checking()) {
       this.todoTimer = cx.timer.every(2000, (cx) => this.refreshTodo(cx));
@@ -322,7 +324,7 @@ export default class Agents extends View {
   scanAutoNames(all, cx) {
     if (checking() || this.closed) return;
     for (const a of agents()) {
-      if (this.autoNamePending.has(a.address) || this.autoNameBlocked.has(a.address)) continue;
+      if (this.autoNamePending.has(a.address)) continue;
       const tries = this.autoNameTries.get(a.address) ?? 0;
       if (tries >= 2) continue;
       const term = all.find(t => t.address === a.address);
@@ -336,7 +338,7 @@ export default class Agents extends View {
       cx.spawn(async (cx) => {
         try {
           const current = terminals().find(t => t.address === a.address);
-          if (!current || !shouldAutoName(current.labels ?? {}) || this.autoNameBlocked.has(a.address)) return;
+          if (!current || !shouldAutoName(current.labels ?? {})) return;
           await this.writeLabel(a.address, { "workbench.name": candidate.name, "workbench.name.source": "auto" });
         } catch {
           this.autoNameTries.set(a.address, (this.autoNameTries.get(a.address) ?? 0) + 1);
@@ -385,11 +387,7 @@ export default class Agents extends View {
         name,
         currentName: p.name ?? "",
         source: "manual",
-        label: async (address, values) => {
-          const r = await hc(["label", address, ...Object.entries(values).map(([k, v]) => `${k}=${v}`)]);
-          if (r.code !== 0) throw new Error("label write failed");
-        },
-        syncTab: async (next) => this.syncTab(p.address, next, cx),
+        label: (address, values) => this.writeLabel(address, values),
       });
       this.renameBusy = false;
       if (this.closed) return;
@@ -398,39 +396,41 @@ export default class Agents extends View {
         cx.notify();
         return;
       }
-      this.autoNameBlocked.add(p.address);
-      if (result.tabSyncFailed) notify({ title: "任务名已保存", body: "标签页名称未同步", level: "warning" });
+      try {
+        const plan = tabSyncPlan(panes(), agents().find(a => a.address === p.address), name);
+        if (plan) {
+          run("tab.rename", plan);
+          // 回显交给常驻侧栏核对，弹窗只等待任务名写入。
+          setShared(TAB_ECHOES, { ...shared(TAB_ECHOES), [plan.id]: {name, at:Date.now()} });
+        }
+      } catch { warnTabSync(); }
       closeOverlay(p.overlay);
-      cx.notify();
     });
   }
 
-  waitRename(cx, ms = 80) {
-    if (this.closed) return Promise.resolve();
-    return new Promise((resolve) => {
-      let handle;
-      const finish = () => {
-        this.renameWaitTimers.delete(handle);
-        this.renameWaitResolvers.delete(finish);
-        resolve();
-      };
-      handle = cx.timer.after(ms, finish);
-      this.renameWaitTimers.add(handle);
-      this.renameWaitResolvers.add(finish);
-    });
-  }
-
-  async syncTab(address, name, cx) {
-    const plan = tabSyncPlan(panes(), agents().find(a => a.address === address), name);
-    if (!plan) return;
-    run("tab.rename", plan);
-    // run 没有回执：有界等待宿主回显，区分“快照稍后更新”与真正未生效。
-    const result = await waitForTabName({
-      plan, name,
-      read: (id) => spaces().flatMap(s => s.tabs ?? []).find(t => t.id === id),
-      wait: () => this.waitRename(cx),
-    });
-    if (!result.ok) throw new Error("tab rename not echoed");
+  checkTabEchoes(cx) {
+    const pending = shared(TAB_ECHOES);
+    if (!pending || this.tabEchoTimer) return;
+    const tabs = spaces().flatMap(s => s.tabs ?? []);
+    const remaining = {};
+    let changed = false;
+    let failed = false;
+    const now = Date.now();
+    for (const [id, entry] of Object.entries(pending)) {
+      if (tabs.some(tab => tab.id === id && tab.name === entry.name)) changed = true;
+      else if (now - entry.at >= 640) {
+        changed = true;
+        failed = true;
+      } else remaining[id] = entry;
+    }
+    if (Object.keys(remaining).length) {
+      this.tabEchoTimer = cx.timer.after(80, cx => {
+        this.tabEchoTimer = null;
+        cx.notify();
+      });
+    }
+    if (changed) setShared(TAB_ECHOES, Object.keys(remaining).length ? remaining : null);
+    if (failed) warnTabSync();
   }
 
   openRowMenu(address) {
@@ -642,10 +642,7 @@ export default class Agents extends View {
     this.closed = true;
     this.machineTimer?.cancel();
     this.renameFocusTimer?.cancel();
-    for (const handle of this.renameWaitTimers ?? []) handle?.cancel?.();
-    for (const resolve of this.renameWaitResolvers ?? []) resolve();
-    this.renameWaitTimers?.clear();
-    this.renameWaitResolvers?.clear();
+    this.tabEchoTimer?.cancel();
     this.dragTimer?.cancel();
     this.dragTimer = null;
     this.todoTimer?.cancel();
@@ -736,6 +733,7 @@ export default class Agents extends View {
     if (props()?.rowMenu) return this.rowMenu(t, props().rowMenu);
     if (props()?.sortMenu) return this.sortMenu(t);
     if (props()?.rename) return this.renameView();
+    this.checkTabEchoes(cx);
     const collapsed = narrow();
     const sort = sortOf();
     let list = agents();
