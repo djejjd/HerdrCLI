@@ -2,8 +2,8 @@
 
 状态: active
 创建: 2026-11-14
-最后更新: 2026-11-14
-关联: archive/2026-11-14-ui-rework/; layouts/
+最后更新: 2026-11-19
+关联: archive/2026-11-14-ui-rework/; layouts/; docs/layouts/README.md
 
 目的：换布局后还能找回旧布局。本文给出「当前布局」与「封存的改版布局」两条恢复路径，以及哪些文件留在本地不入库。
 
@@ -16,12 +16,13 @@
 | 封存的 UI 改版 | `archive/2026-11-14-ui-rework/` | 按需拷回上面两处 |
 | 安装脚本 | `scripts/`（见仓库 README） | — |
 
-`layouts/` 里各文件用途：
+`layouts/` 里各文件用途（逐套布局的整体说明见 [`docs/layouts/`](../layouts/README.md)）：
 
-- `agent-workbench.json` — 当前使用的布局（root: 侧栏 + 主区）
-- `main.json` / `terminals.json` — 上游默认与终端视图
+- `agents-order.json` — 当前使用的布局（文件树侧栏 + 溢出标签 + 右侧文件/变更面板）
+- `agent-workbench.json` — 工作台布局（单段 Agent 侧栏 + 工作台标签/面板 + 通知）
+- `main.json` / `terminals.json` — 上游默认与纯终端视图
+- `verified-main.json` — 与 `main` 同构、标签换 `verified-tabs` 的验证基线
 - `win98.json` / `win98.svg` — 试验主题
-- `verified-main.json` — 验证过的基线副本
 
 ## 二、恢复「当前布局」
 
@@ -34,11 +35,11 @@
    rsync -a mods/ ~/.config/herdr-app/mods/
    rsync -a layouts/ ~/.config/herdr-app/layouts/
    ```
-3. 切换并检查：
+3. 切换并检查（当前布局为 `agents-order`）：
    ```bash
-   herdr-app do layout.switch --name agent-workbench
+   herdr-app do layout.switch --name agents-order
    herdr-app status          # 期望 errors: []
-   herdr-app check mods/workbench-tabs mods/agent-workbench
+   herdr-app check mods/agents-order mods/compact-tabs
    ```
 
 ## 三、恢复「已封存的 UI 改版」（workbench-top/crumb/status 那一套）
