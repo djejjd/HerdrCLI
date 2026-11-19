@@ -1,7 +1,6 @@
 // 待办视图：标题分段、行、空/错误/冲突态。只消费 todo.js 的视图模型。
 import { div, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { todoBadge } from "./todo.js";
 
 // 统一 14px 细线图标：运行态中性，review 用 accent，needs_user 用提醒色，
 // blocked/conflict 只用小图标承载错误色；行文字保持正常前景。
@@ -15,26 +14,25 @@ export function statusIcon(state, t) {
   return svg("mods/agents-order/idle.svg").size(14).flex_none().text_color(t.dim);
 }
 
-function tab(id, label, active, t, action) {
-  return div().id(id).h(24).px(4).flex().items_center().text_size(11.5).font_medium()
-    .text_color(active ? t.foreground : t.dim)
-    .cursor_pointer().hover(s => s.text_color(t.foreground))
-    .on_click((_e, cx) => action(cx)).child(label);
+// 行尾轻提示使用同一笔画和字号；仅授权使用提醒色。
+export function hintView(t, hint, count, open, compact = false) {
+  const paths = { permission:"permission", reply:"reply", review:"review", idle:"idle" };
+  const busy = hint.icon === "working";
+  const path = busy ? "mods/workspace-chrome/spinner.svg" : "mods/agents-order/" + paths[hint.icon] + ".svg";
+  const icon = svg(path).size(13).flex_none().text_color(hint.icon === "permission" ? t.working : t.muted);
+  return h_flex().gap(3).flex_none().items_center()
+    .when(!compact && count > 1, el => el.id("items-" + open.id).cursor_pointer().tooltip("查看这 " + count + " 项")
+      .on_click((_e,cx) => { cx.stop_propagation(); open.show(cx); }))
+    .child(busy ? icon.spin(900) : icon)
+    .when(!compact && Boolean(hint.text), el => el.child(div().text_size(12).text_color(t.muted).child(hint.text)));
 }
 
-export function modeHeader(t, mode, badge, actions) {
-  const count = badge?.kind === "count" ? badge.text : badge?.kind === "error" ? "!" : badge?.kind === "loading" ? "…" : null;
-  const left = h_flex().items_center().gap(8)
-    .child(tab("mode-agents", "Agents", mode === "agents", t, actions.agents))
-    .child(h_flex().items_center().gap(4)
-      .child(tab("mode-todo", "待办", mode === "todo", t, actions.todo))
-      .when(Boolean(count), el => el.child(div()
-        .h(14).min_w(14).px(3).flex().items_center().justify_center().rounded(4)
-        .bg(t.selected).text_size(10).text_color(t.muted)
-        .child(count))));
+export function modeHeader(t, detail, back, right) {
   return h_flex().px(16).h(41).pt(14).pb(5).flex_none().items_center().justify_between()
-    .child(left)
-    .child(actions.right ?? div().w(14).h(14));
+    .child(div().id("agents-heading").text_size(12).text_color(t.foreground)
+      .when(detail, el => el.cursor_pointer().on_click((_e,cx) => back(cx)))
+      .child(detail ? "‹ Agents" : "Agents"))
+    .child(right);
 }
 
 export function todoRow(item, t, { selected, failure, onOpen }) {

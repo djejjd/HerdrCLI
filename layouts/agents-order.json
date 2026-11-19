@@ -43,17 +43,6 @@
           "type": "column",
           "children": [
             {
-              "id": "spaces",
-              "type": "block",
-              "size": {
-                "weight": 1
-              },
-              "min": 90,
-              "content": {
-                "mod": "spaces"
-              }
-            },
-            {
               "id": "agents",
               "type": "block",
               "size": {
@@ -61,7 +50,10 @@
               },
               "min": 90,
               "content": {
-                "mod": "agents-order"
+                "mod": "agents-order",
+                "props": {
+                  "tree": true
+                }
               }
             }
           ]
@@ -94,7 +86,7 @@
           },
           "window_drag": true,
           "content": {
-            "mod": "tabs"
+            "mod": "compact-tabs"
           }
         },
         {

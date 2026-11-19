@@ -35,6 +35,8 @@ export function autoNameFromTitle(title, program = '', cwd = '', address = '') {
   s = s.replace(/^(?:AGENT|OMP|OH-MY-PI|DS Harness|DeepSeek Harness|Codex|Claude|OpenCode|SPEC)\s*[:：>\-–—]\s*/iu, '');
   s = s.replace(/^(?:AGENT|OMP|OH-MY-PI|DS Harness|DeepSeek Harness|Codex|Claude|OpenCode|SPEC)\s+/iu, '');
   s = s.replace(/^[^\p{Script=Han}\p{Script=Latin}\p{N}]+/u, '').trim();
+  // 审批期间工具会把状态词放在任务名前；只有状态时沿用已有名称。
+  s = s.replace(/^(?:action required|approval required|permission required)(?:\s*[|｜:：]\s*|$)/i, '');
   const first = s.split(SEGMENT_RE)[0].trim();
   if (!first) return null;
   const candidate = truncateWords(first);

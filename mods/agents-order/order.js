@@ -89,3 +89,8 @@ export async function persistOrder(ids, previous, label) {
   }
   return { ok: true };
 }
+
+// 手柄占用工具图标的固定位置，避免悬停改变标题可用宽度。
+export function showGrip(agent, memberCount, hoveredHandle) {
+  return !agent.pinned && memberCount > 1 && hoveredHandle === agent.address;
+}

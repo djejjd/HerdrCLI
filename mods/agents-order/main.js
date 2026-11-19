@@ -1,12 +1,17 @@
+import { sidebarIndex } from "./unified-sidebar-index.js";
+import { sidebarRows } from "./tree-view.js";
 // Agents in grouped or priority views; parents take their most urgent sub-agent's place.
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle, InputState, Input } from "gpui-base";
-import { agents, terminals, panes, focused, spaces, run, hc, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window as herdrWindow, layout, checking, home, appHome, readTextFile, exec, notify } from "herdr";
-import { orderedGroup, orderedBySpace, reorderGroup, dragDecision, releaseTime, dropIndex, rowCenters, projectedPositions, persistOrder } from "./order.js";
-import { TodoStore, navigationPlan, agentIconState, todoBadge, modeAfterToggle, preserveSelection, applyModeAction, modeActions, subAgentState } from "./todo.js";
-import { modeHeader, todoBody, todoRefreshIcon, statusIcon } from "./todo-view.js";
-import { displayName, validateName, validateEdit, tabSyncPlan, commitName, waitForTabName, focusIfOpen, autoNameCandidate, shouldAutoName } from "./names.js";
+import { machines, agents, terminals, panes, focused, spaces, run, hc, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window as herdrWindow, layout, checking, home, appHome, readTextFile, exec, notify } from "herdr";
+import { showGrip, orderedGroup, orderedBySpace, reorderGroup, dragDecision, releaseTime, dropIndex, rowCenters, projectedPositions, persistOrder } from "./order.js";
+import { groupRowItems, rowHint, TodoStore, navigationPlan, preserveSelection, applyModeAction } from "./todo.js";
+import { hintView, modeHeader, todoBody, todoRefreshIcon, statusIcon } from "./todo-view.js";
+import { displayName, validateName, validateEdit, tabSyncPlan, commitName, focusIfOpen, autoNameCandidate, shouldAutoName } from "./names.js";
+
+const TAB_ECHOES = "agents.rename.pendingTabEchoes";
+const warnTabSync = () => notify({title:"任务名已保存", body:"标签页名称未同步", level:"warning"});
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -51,7 +56,7 @@ function title(tab, l) {
   return (tab.name === prog || !tab.named) && telling ? live : tab.name;
 }
 const RANK = { blocked: 4, done: 3, working: 2, idle: 1 };
-const MODE_KEY = "agents-order.mode";
+
 const TODO_SELECT_KEY = "agents-order.todo.selected";
 // A sub-agent without a pane isn't in agents(): its raw word, error counting as
 // blocked. It's never done: it reports to its parent, and the parent's done is the news.
@@ -83,7 +88,7 @@ function icon(p, size, color) {
 
 export default class Agents extends View {
   init(_props, cx) {
-    if (props()?.sortMenu) return;
+    if (props()?.sortMenu || props()?.rowMenu) return;
     this.closed = false;
     if (props()?.rename) {
       this.handle = cx.focus_handle();
@@ -95,6 +100,13 @@ export default class Agents extends View {
       return;
     }
     this.folded = new Set();
+    this.configuredMachines = [];
+    if (props()?.tree && !checking()) {
+      this.refreshSidebarMachines(cx);
+      this.machineTimer = cx.timer.every(15000, cx => this.refreshSidebarMachines(cx));
+    }
+    try { this.folds = new Set(JSON.parse(localStorage.getItem("sidebar.tree.folds") ?? "[]")); }
+    catch { this.folds = new Set(); }
     // Each agent's last state and when it changed (ms), kept across restarts.
     this.changed = JSON.parse(localStorage.getItem("changed") ?? "{}");
     this.pendingPins = JSON.parse(localStorage.getItem("pins") ?? "[]");
@@ -106,7 +118,7 @@ export default class Agents extends View {
     this.previews = new Map();
     this.error = "";
     this.focusHandle = cx.focus_handle();
-    this.mode = props()?.todoMode === "todo" || localStorage.getItem(MODE_KEY) === "todo" ? "todo" : "agents";
+    this.mode = props()?.todoMode === "todo" ? "todo" : "agents";
     this.todo = new TodoStore({ read: async () => readTextFile(this.todoPath()) });
     this.todoState = this.todo.state;
     this.todoSelected = localStorage.getItem(TODO_SELECT_KEY);
@@ -118,12 +130,32 @@ export default class Agents extends View {
     this.todoScroll = ScrollHandle.new();
     this.autoNamePending = new Set();
     this.autoNameTries = new Map();
-    this.autoNameBlocked = new Set();
     cx.timer.every(30000, (cx) => cx.notify());
     if (!checking()) {
       this.todoTimer = cx.timer.every(2000, (cx) => this.refreshTodo(cx));
       this.refreshTodo(cx);
     }
+  }
+
+  refreshSidebarMachines(cx) {
+    if (this.readingMachines) return;
+    this.readingMachines = true;
+    cx.spawn(async cx => {
+      try {
+        const response = await hc(["machine","ls","--json"]);
+        if (!this.closed && response.code === 0) {
+          this.configuredMachines = (JSON.parse(response.stdout).machines ?? []).filter(m => !m.temporary && m.name);
+          cx.notify();
+        }
+      } catch { /* 保留上次已知机器，宿主仍提供在线布局。 */ }
+      finally { this.readingMachines = false; }
+    });
+  }
+
+  toggle(key,cx) {
+    if (this.folds.has(key)) this.folds.delete(key); else this.folds.add(key);
+    localStorage.setItem("sidebar.tree.folds", JSON.stringify([...this.folds]));
+    cx.notify();
   }
 
   todoPath() {
@@ -133,22 +165,26 @@ export default class Agents extends View {
   }
 
   modeHeaderView(t, sort) {
-    const badge = todoBadge(this.todoState);
+
     const sortButton = div().id("ag-sort").text_size(11).text_color(t.dim)
       .hover((s) => s.text_color(t.foreground))
       .on_click(() => openOverlay({ mod: "agents-order", kind: "popup", width: 200, height: 140, props: { sortMenu: true } }))
       .tooltip(`Sort agents: ${sort.label}`)
       .child(svg(`mods/workspace-chrome/${sort.icon}.svg`).size(14));
-    const actions = modeActions(this, (mode) => localStorage.setItem(MODE_KEY, mode), (cx) => this.refreshTodo(cx));
-    return modeHeader(t, this.mode, badge, {
-      agents: actions.agents,
-      todo: actions.todo,
-      right: this.mode === "agents" ? sortButton : todoRefreshIcon(t, actions.refresh),
-    });
+    const detail = this.mode === "todo";
+    return modeHeader(t, detail, cx => applyModeAction(this, "agents", cx),
+      detail ? todoRefreshIcon(t, cx => this.refreshTodo(cx)) : sortButton);
   }
 
-  switchMode(mode, cx) {
-    return applyModeAction(this, mode, cx, (next) => localStorage.setItem(MODE_KEY, next));
+  showItems(address, cx) {
+    this.detailAddress = address;
+    applyModeAction(this, "todo", cx);
+  }
+
+  hint(agent, compact = false) {
+    const items = this.rowItems.byAddress.get(agent.address) ?? [];
+    return hintView(theme(), rowHint(agent, items), items.length,
+      { id:agent.address, show:cx => this.showItems(agent.address, cx) }, compact);
   }
 
   refreshTodo(cx) {
@@ -266,11 +302,13 @@ export default class Agents extends View {
   }
 
   todoShell(t) {
+    const selectedItems = this.detailAddress === null ? this.rowItems.unlinked
+      : this.detailAddress ? this.rowItems.byAddress.get(this.detailAddress) ?? [] : this.todoState.items;
     return v_flex().relative().track_focus(this.focusHandle).size_full().min_h(0)
       .bg(t.chrome).border_t(1).border_color(t.border).text_size(13)
-      .when(!narrow(), (el) => el.child(this.modeHeaderView(t, sortOf())))
+      .child(this.modeHeaderView(t, sortOf()))
       .when(this.error, (el) => el.child(div().px(12).py(4).text_size(11).text_color(t.blocked).child(this.error)))
-      .child(todoBody(t, this.todoState, this.todoSelected, this.todoFailure,
+      .child(todoBody(t, { ...this.todoState, items:selectedItems }, this.todoSelected, this.todoFailure,
         (item, cx) => this.openTodo(item, cx), this.todoScroll))
       .when(narrow(), (el) => el.child(h_flex().h(28).items_center().justify_center()
         .child(div().id("collapse").text_size(13).text_color(t.dim).hover((s) => s.text_color(t.foreground))
@@ -286,7 +324,7 @@ export default class Agents extends View {
   scanAutoNames(all, cx) {
     if (checking() || this.closed) return;
     for (const a of agents()) {
-      if (this.autoNamePending.has(a.address) || this.autoNameBlocked.has(a.address)) continue;
+      if (this.autoNamePending.has(a.address)) continue;
       const tries = this.autoNameTries.get(a.address) ?? 0;
       if (tries >= 2) continue;
       const term = all.find(t => t.address === a.address);
@@ -300,7 +338,7 @@ export default class Agents extends View {
       cx.spawn(async (cx) => {
         try {
           const current = terminals().find(t => t.address === a.address);
-          if (!current || !shouldAutoName(current.labels ?? {}) || this.autoNameBlocked.has(a.address)) return;
+          if (!current || !shouldAutoName(current.labels ?? {})) return;
           await this.writeLabel(a.address, { "workbench.name": candidate.name, "workbench.name.source": "auto" });
         } catch {
           this.autoNameTries.set(a.address, (this.autoNameTries.get(a.address) ?? 0) + 1);
@@ -349,11 +387,7 @@ export default class Agents extends View {
         name,
         currentName: p.name ?? "",
         source: "manual",
-        label: async (address, values) => {
-          const r = await hc(["label", address, ...Object.entries(values).map(([k, v]) => `${k}=${v}`)]);
-          if (r.code !== 0) throw new Error("label write failed");
-        },
-        syncTab: async (next) => this.syncTab(p.address, next, cx),
+        label: (address, values) => this.writeLabel(address, values),
       });
       this.renameBusy = false;
       if (this.closed) return;
@@ -362,39 +396,55 @@ export default class Agents extends View {
         cx.notify();
         return;
       }
-      this.autoNameBlocked.add(p.address);
-      if (result.tabSyncFailed) notify({ title: "任务名已保存", body: "标签页名称未同步", level: "warning" });
+      try {
+        const plan = tabSyncPlan(panes(), agents().find(a => a.address === p.address), name);
+        if (plan) {
+          run("tab.rename", plan);
+          // 回显交给常驻侧栏核对，弹窗只等待任务名写入。
+          setShared(TAB_ECHOES, { ...shared(TAB_ECHOES), [plan.id]: {name, at:Date.now()} });
+        }
+      } catch { warnTabSync(); }
       closeOverlay(p.overlay);
-      cx.notify();
     });
   }
 
-  waitRename(cx, ms = 80) {
-    if (this.closed) return Promise.resolve();
-    return new Promise((resolve) => {
-      let handle;
-      const finish = () => {
-        this.renameWaitTimers.delete(handle);
-        this.renameWaitResolvers.delete(finish);
-        resolve();
-      };
-      handle = cx.timer.after(ms, finish);
-      this.renameWaitTimers.add(handle);
-      this.renameWaitResolvers.add(finish);
-    });
+  checkTabEchoes(cx) {
+    const pending = shared(TAB_ECHOES);
+    if (!pending || this.tabEchoTimer) return;
+    const tabs = spaces().flatMap(s => s.tabs ?? []);
+    const remaining = {};
+    let changed = false;
+    let failed = false;
+    const now = Date.now();
+    for (const [id, entry] of Object.entries(pending)) {
+      if (tabs.some(tab => tab.id === id && tab.name === entry.name)) changed = true;
+      else if (now - entry.at >= 640) {
+        changed = true;
+        failed = true;
+      } else remaining[id] = entry;
+    }
+    if (Object.keys(remaining).length) {
+      this.tabEchoTimer = cx.timer.after(80, cx => {
+        this.tabEchoTimer = null;
+        cx.notify();
+      });
+    }
+    if (changed) setShared(TAB_ECHOES, Object.keys(remaining).length ? remaining : null);
+    if (failed) warnTabSync();
   }
 
-  async syncTab(address, name, cx) {
-    const plan = tabSyncPlan(panes(), agents().find(a => a.address === address), name);
-    if (!plan) return;
-    run("tab.rename", plan);
-    // run 没有回执：有界等待宿主回显，区分“快照稍后更新”与真正未生效。
-    const result = await waitForTabName({
-      plan, name,
-      read: (id) => spaces().flatMap(s => s.tabs ?? []).find(t => t.id === id),
-      wait: () => this.waitRename(cx),
-    });
-    if (!result.ok) throw new Error("tab rename not echoed");
+  openRowMenu(address) {
+    openOverlay({ mod: "agents-order", kind: "popup", width: 148, props: { rowMenu: address } });
+  }
+
+  rowMenu(t, address) {
+    const agent = agents().find(a => a.address === address);
+    const item = (label, action) => div().id(label).px(8).py(6).text_size(12.5).cursor_pointer()
+      .hover(el => el.bg(t.hover)).on_click(() => { closeOverlay(props().overlay); action(); }).child(label);
+    return v_flex().p(4).bg(t.raised)
+      .child(item("重命名", () => this.renameByAddress(address)))
+      .when(Boolean(agent), el => el.child(item(agent?.pinned ? "取消置顶" : "置顶",
+        () => run("terminal.pin", { terminal: address, pinned: !agent.pinned }))));
   }
 
   renameButton(address, t) {
@@ -413,11 +463,12 @@ export default class Agents extends View {
     const name = stored || fallback;
     const parentSpace = term?.parent ? agents().find(a => a.address === term.parent)?.space : null;
     const space = info?.space || term?.labels?.["herdr.space"] || parentSpace;
+    const storedNames = new Map(all.map(t => [t.address, displayName(t.labels ?? {}, "")]));
     const siblings = [
       ...agents().filter(a => a.address !== address && (!space || a.space === space))
-        .map(a => this.nameById?.get(a.address) || a.name || a.program?.name || ""),
+        .map(a => storedNames.get(a.address) || a.name || a.program?.name || ""),
       ...all.filter(t => t.address !== address && t.parent && (!space || agents().find(a => a.address === t.parent)?.space === space))
-        .map(t => this.nameById?.get(t.address) || t.name || t.program?.name || ""),
+        .map(t => storedNames.get(t.address) || t.name || t.program?.name || ""),
     ].filter(Boolean);
     openOverlay({ mod: "agents-order", kind: "dialog", width: 340, props: { rename: true, address, name, siblings } });
   }
@@ -551,7 +602,7 @@ export default class Agents extends View {
     this.cancelDrag(cx);
     this.lastDragEnd = releaseTime(d, this.lastDragEnd ?? 0, Date.now());
     const current = new Map(agents().map(a => [a.address, a]));
-    d.valid = sortOf().id === "grouped" && d.members.every(a => {
+    d.valid = (props()?.tree || sortOf().id === "grouped") && d.members.every(a => {
       const live = current.get(a.address);
       return live?.space === d.space && !live.pinned;
     });
@@ -588,12 +639,11 @@ export default class Agents extends View {
   }
 
   close() {
+    this.spaceDrag = null;
     this.closed = true;
+    this.machineTimer?.cancel();
     this.renameFocusTimer?.cancel();
-    for (const handle of this.renameWaitTimers ?? []) handle?.cancel?.();
-    for (const resolve of this.renameWaitResolvers ?? []) resolve();
-    this.renameWaitTimers?.clear();
-    this.renameWaitResolvers?.clear();
+    this.tabEchoTimer?.cancel();
     this.dragTimer?.cancel();
     this.dragTimer = null;
     this.todoTimer?.cancel();
@@ -648,7 +698,7 @@ export default class Agents extends View {
     });
   }
 
-  subRow(t, s, shown, compact) {
+  subRow(t, s, shown) {
     const k = s.t;
     const st = kidStatus(k, this.listed);
     const pic = icon(k.program, 14, t.foreground);
@@ -665,7 +715,8 @@ export default class Agents extends View {
       .text_size(12.5)
       .when(on, (el) => el.bg(t.raised))
       .hover((s) => s.bg(t.hover))
-      .on_hover((active, cx) => { this.hovered = active ? k.address : (this.hovered === k.address ? null : this.hovered); cx.notify(); })
+      .when(props()?.tree, el => el.on_mouse_down("right", (_e,cx) => { cx.stop_propagation(); this.openRowMenu(k.address); }))
+      .when(!props()?.tree, el => el.on_hover((active, cx) => { this.hovered = active ? k.address : null; cx.notify(); }))
       .on_click(() => (this.listed.has(k.address) ? run("pane.focus", { terminal: k.address }) : this.peek(k.address)))
       .children(s.lines.map(l => div().self_start().mt(-4).w(9).h(17).mr(4).flex_none()
         .when(Boolean(l), el => el.border_l(1.5).border_color(t.input))
@@ -674,28 +725,16 @@ export default class Agents extends View {
       .child(div().flex_1().min_w(0).truncate().tooltip(this.nameById?.get(k.address) || k.name || k.template || k.program?.name || k.address)
         .text_color(on ? t.foreground : t.muted)
         .child(this.nameById?.get(k.address) || k.name || k.template || k.program?.name || k.address))
-      .when(this.hovered === k.address, (el) => el.child(this.renameButton(k.address, t)))
-      .child(this.subStatus(t, k, st));
-  }
-
-  agentState(a) {
-    return agentIconState(a, this.todoState?.items ?? [], this.todoVerified ?? {});
-  }
-
-  // 子 Agent 用自身 address 关联事项，保留产品 icon/树结构，不串父行状态。
-  subStatus(t, k, st) {
-    return statusIcon(subAgentState(k, st, this.todoState?.items ?? [], this.todoVerified ?? {}), t);
-  }
-
-  // Agents 行与待办行复用同一套 14px 状态图标；图标只表达状态，不改排序。
-  status(t, a) {
-    return statusIcon(a?.address ? this.agentState(a) : a?.status, t);
+      .when(!props()?.tree && this.hovered === k.address, (el) => el.child(this.renameButton(k.address, t)))
+      .child(this.hint({ ...k, status:st }));
   }
 
   render(cx) {
     const t = theme();
+    if (props()?.rowMenu) return this.rowMenu(t, props().rowMenu);
     if (props()?.sortMenu) return this.sortMenu(t);
     if (props()?.rename) return this.renameView();
+    this.checkTabEchoes(cx);
     const collapsed = narrow();
     const sort = sortOf();
     let list = agents();
@@ -710,10 +749,12 @@ export default class Agents extends View {
     // A kept sub-agent (one with a pane) is in agents() too: where a tree shows
     // it, it gets no row of its own, unless it's pinned.
     const nested = new Set(collapsed ? [] : list.flatMap((a) => this.tree(all, a.address).map((s) => s.t.address)));
+    this.rowItems = groupRowItems(this.todoState.items ?? [], new Set([...list.map(a => a.address), ...nested]), this.todoVerified);
     list = list.filter((a) => a.pinned || !nested.has(a.address));
     const tabCounts = new Map();
     for (const a of list) tabCounts.set(a.tab, (tabCounts.get(a.tab) ?? 0) + 1);
-    const byPriority = sort.id === "priority";
+    const unified = Boolean(props()?.tree);
+    const byPriority = !unified && sort.id === "priority";
     const urgency = new Map(list.map((a) => [a.address, Math.max(this.rank(a), ...this.tree(all, a.address).map((s) => RANK[kidStatus(s.t, this.listed)] ?? 0))]));
     const rankOf = (a) => urgency.get(a.address);
     if (byPriority) list = [...list].sort((x, y) => rankOf(y) - rankOf(x) || this.since(y) - this.since(x) || y.seq - x.seq);
@@ -731,7 +772,7 @@ export default class Agents extends View {
       const subs = collapsed ? [] : this.tree(all, a.address);
       const r = row(a, i, subs, members);
       if (this.folded.has(a.address)) return [r];
-      return [r, ...subs.map((s) => this.subRow(t, s, shown, byPriority))];
+      return [r, ...subs.map((s) => this.subRow(t, s, shown))];
     };
 
     // The fold chevron; folded, the count too, colored by the most urgent one.
@@ -795,8 +836,9 @@ export default class Agents extends View {
           .hover((s) => s.bg(t.hover))
           .on_click(() => run("pane.focus", { pane: a.pane }))
           .child(div().flex_1().min_w(0).whitespace_nowrap().text_right().text_color(t.muted).child(String(i + 1)))
-          .child(h_flex().w(14).flex_none().items_center().justify_center().child(this.status(t, a, true)));
+          .child(h_flex().w(14).flex_none().items_center().justify_center().child(this.hint(a, true)));
       }
+      const attention = rowHint(a, this.rowItems.byAddress.get(a.address) ?? []).text;
       const when = this.since(a);
       const idle = a.status === "idle" && !a.focused;
       const isPinned = a.pinned;
@@ -819,7 +861,7 @@ export default class Agents extends View {
         .child(svg(`mods/workspace-chrome/${isPinned ? "pin-off" : "pin"}.svg`).size(13));
       // Under a space header the space goes without saying; an automatic tab number says nothing.
       // Without a space header above (priority, pinned) the row names its space.
-      const full = byPriority || isPinned;
+      const full = !unified && (byPriority || isPinned);
       const storedName = this.nameById?.get(a.address) || "";
       const fallbackName = full ? a.space_name || label(a) : more ?? (/^\d+$/.test(label(a)) ? a.program?.name || label(a) : label(a));
       const name = storedName || fallbackName;
@@ -830,39 +872,50 @@ export default class Agents extends View {
         .flex_none()
         .rounded(8)
         .items_center()
-        .gap(9)
+        .gap(unified ? 7 : 9)
         .when(a.focused, (el) => el.bg(t.selected))
         .cursor_pointer()
         .hover((s) => s.bg(t.hover))
-        .on_hover((on, cx) => {
+        .when(unified, el => el.on_mouse_down("right", (_e,cx) => { cx.stop_propagation(); this.openRowMenu(a.address); }))
+        .when(!unified, el => el.on_hover((on, cx) => {
           if (on) this.hovered = a.address;
           else if (this.hovered === a.address) this.hovered = null;
           cx.notify();
-        })
+        }))
         .when(this.drag?.address === a.address, el => el.opacity(0.35))
         .when(this.drag?.space === a.space && this.drag?.target === i && this.drag?.address !== a.address && !isPinned,
           el => el.border_1().border_color(t.accent))
         .on_click(() => { if (Date.now() - (this.lastDragEnd ?? 0) > 300) run("pane.focus", { pane: a.pane }); })
-        .when(!byPriority && !isPinned && members.length > 1, el => el.child(
+        .when(unified, el => el.child(h_flex().id("handle-" + a.address).w(17).h_full().flex_none().items_center().justify_center()
+          .when(!isPinned && members.length > 1, slot => slot.cursor_grab().tooltip("按住拖动排序")
+            .on_hover((over,cx) => {
+              if (over) this.hoveredHandle = a.address;
+              else if (this.hoveredHandle === a.address) this.hoveredHandle = null;
+              cx.notify();
+            })
+            .on_mouse_down("left",(e,cx) => { cx.stop_propagation(); this.beginDrag(a,members,i,all,e,cx); }))
+          .child(showGrip(a, members.length, this.hoveredHandle)
+            ? svg("mods/agents-order/grip.svg").size(13).text_color(t.dim) : pic ?? div())))
+        .when(!unified && !byPriority && !isPinned && members.length > 1, el => el.child(
           h_flex().id(`drag-${a.address}`).w(17).h_full().flex_none().items_center().justify_center()
             .cursor_grab().tooltip("按住拖动排序")
             .on_mouse_down("left", (e, cx) => this.beginDrag(a, members, i, all, e, cx))
             .child(svg("mods/agents-order/grip.svg").size(13).text_color(t.dim))))
-        .when(Boolean(pic), el => el.child(div().id(`agent-fold-${a.address}`)
+        .when(!unified && Boolean(pic), el => el.child(div().id(`agent-fold-${a.address}`)
           .when(subs.length > 0, el => el.on_click((_e, cx) => {
             cx.stop_propagation();
             this.folded.has(a.address) ? this.folded.delete(a.address) : this.folded.add(a.address);
             cx.notify();
           })).child(pic)))
         .child(h_flex().flex_1().min_w(0).gap(5).items_center()
-          .child(div().min_w(0).max_w(full && more ? 120 : 200).truncate().tooltip(name).text_color(idle ? t.muted : t.foreground).child(name))
+          .child(div().min_w(0).when(!unified, el => el.max_w(full && more ? 120 : 200)).truncate().tooltip(name).text_color(idle ? t.muted : t.foreground).child(name))
           .when(full && Boolean(more), el => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(`\u00b7 ${more}`))))
-        .when(Boolean(machine), el => el.child(div().text_size(10).text_color(t.dim).child(machine)))
+        .when(!unified && Boolean(machine), el => el.child(div().text_size(10).text_color(t.dim).child(machine)))
         .when(subs.length > 0, el => el.child(fold(a, subs)))
-        .when(this.hovered === a.address, el => el.child(this.renameButton(a.address, t)))
-        .when(this.hovered === a.address, el => el.child(pin))
-        .when(this.hovered !== a.address && Boolean(when), el => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - when))))
-        .child(this.status(t, a, byPriority && !isPinned));
+        .when(!unified && this.hovered === a.address, el => el.child(this.renameButton(a.address, t)))
+        .when(!unified && this.hovered === a.address, el => el.child(pin))
+        .when(!attention && (unified || this.hovered !== a.address) && Boolean(when), el => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - when))))
+        .child(this.hint(a));
     };
 
     // Groups in list order: spaces (grouped) or priority sections. Agents of a
@@ -899,7 +952,7 @@ export default class Agents extends View {
         .when(byPriority || !open, (el) => el.child(div().text_color(t.dim).child(String(g.members.length))))
         .child(div().flex_1())
         .when(!open, (el) => el
-          .when(!byPriority && top && top !== "idle", (el) => el.child(this.status(t, { status: top }, true)))
+          .when(!byPriority && top && top !== "idle", (el) => el.child(statusIcon(top, t)))
           .child(svg("mods/workspace-chrome/chevron-right.svg").size(11).flex_none().text_color(t.dim)));
     };
     const groupRows = g => {
@@ -916,7 +969,13 @@ export default class Agents extends View {
           .absolute().left(0).right(0).top(positions.get(a.address)).h(heights[a.address])
           .transition("top", 160).children(withKids(a, i, g.members))))];
     };
-    const rows = collapsed
+    const projects = spaces();
+    const tree = unified ? sidebarIndex(projects,list,this.rowItems.byAddress,a => this.tree(all,a.address).map(k => k.t)) : null;
+    const projectAgents = members => [
+      ...members.filter(a => a.pinned).flatMap((a,i) => withKids(a,i,[])),
+      ...groupRows({ id:"project", members:members.filter(a => !a.pinned) }),
+    ];
+    const rows = unified && !collapsed ? sidebarRows(t,projects,[...machines(),...this.configuredMachines],tree,this,projectAgents) : collapsed
       ? list.flatMap(withKids)
       : groups.flatMap((g) => [header(g), ...(this.folded.has(g.id) ? [] : groupRows(g))]);
 
@@ -925,21 +984,35 @@ export default class Agents extends View {
       .track_focus(this.focusHandle)
       .on_mouse_down("left", (e) => { if (e.bounds) this.rootBounds = e.bounds; })
       .on_mouse_move((e, cx) => { if (e.bounds) this.rootBounds = e.bounds; if (this.drag) this.moveDrag(e.position.y, cx); })
-      .on_mouse_up("left", (_e, cx) => this.finishDrag(cx))
+      .on_hover((over,cx) => { if (!over && this.spaceDrag) { this.spaceDrag = null; cx.notify(); } })
+      .on_mouse_up("left", (_e, cx) => {
+        if (this.spaceDrag) { this.spaceDrag = null; cx.notify(); }
+        this.finishDrag(cx);
+      })
       .on_mouse_down_out((_e, cx) => { if (this.drag) this.cancelDrag(cx); })
-      .on_key_down((e, cx) => { if (e.key === "escape" && this.drag) this.cancelDrag(cx); })
+      .on_key_down((e, cx) => { if (e.key === "escape") { this.spaceDrag = null; this.cancelDrag(cx); } })
       .size_full()
       .min_h(0)
       .bg(t.chrome)
       .border_t(1)
       .border_color(t.border)
       .text_size(13)
-      .when(!collapsed, (el) => el.child(this.modeHeaderView(t, sort)))
-      .when(list.length === 0 && !collapsed, (el) =>
+      .when(!collapsed && !unified, el => el.child(this.modeHeaderView(t,sort)))
+      .when(unified && !collapsed, el => el.child(h_flex().h(28).px(16).items_center().justify_end()
+        .child(div().id("manage-spaces").px(4).text_size(11).text_color(t.dim).cursor_pointer()
+          .tooltip("管理工作区和机器").on_click(() => openOverlay({mod:"compact-spaces",kind:"dialog",width:380,height:480,props:{manage:true}})).child("管理"))
+        .child(div().id("new-space").px(5).text_color(t.dim).cursor_pointer().tooltip("新建工作区")
+          .on_click(() => run("space.new")).child("+"))))
+      .when(list.length === 0 && !collapsed && !unified, (el) =>
         el.child(div().px(12).text_size(12).text_color(t.dim).child("No agent status yet. Agents show up here when they report their status. Older versions and agents inside tmux may not.")),
       )
       .when(this.error, el => el.child(div().px(12).py(4).text_size(11).text_color(t.blocked).child(this.error)))
       .child(v_flex().id("ag-list").flex_1().min_h(0).px(collapsed ? 0 : 8).overflow_y_scrollbar().mode("always").children(rows))
+      .when(!collapsed && (this.rowItems.unlinked.length || this.todoState.errors?.length ||
+          ["error","stale","missing"].includes(this.todoState.kind)), el => el.child(
+        div().id("unlinked-items").px(16).py(4).text_size(12).text_color(t.muted).cursor_pointer()
+          .on_click((_e,cx) => this.showItems(null,cx))
+          .child(this.rowItems.unlinked.length ? "未关联事项 " + this.rowItems.unlinked.length : "事项读取异常")))
       .when(collapsed, (el) =>
         el.child(
           h_flex()
