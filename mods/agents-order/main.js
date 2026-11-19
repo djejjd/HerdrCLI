@@ -1,9 +1,11 @@
+import { sidebarIndex } from "./unified-sidebar-index.js";
+import { sidebarRows } from "./tree-view.js";
 // Agents in grouped or priority views; parents take their most urgent sub-agent's place.
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle, InputState, Input } from "gpui-base";
-import { agents, terminals, panes, focused, spaces, run, hc, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window as herdrWindow, layout, checking, home, appHome, readTextFile, exec, notify } from "herdr";
-import { orderedGroup, orderedBySpace, reorderGroup, dragDecision, releaseTime, dropIndex, rowCenters, projectedPositions, persistOrder } from "./order.js";
+import { machines, agents, terminals, panes, focused, spaces, run, hc, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window as herdrWindow, layout, checking, home, appHome, readTextFile, exec, notify } from "herdr";
+import { showGrip, orderedGroup, orderedBySpace, reorderGroup, dragDecision, releaseTime, dropIndex, rowCenters, projectedPositions, persistOrder } from "./order.js";
 import { groupRowItems, rowHint, TodoStore, navigationPlan, preserveSelection, applyModeAction } from "./todo.js";
 import { hintView, modeHeader, todoBody, todoRefreshIcon, statusIcon } from "./todo-view.js";
 import { displayName, validateName, validateEdit, tabSyncPlan, commitName, waitForTabName, focusIfOpen, autoNameCandidate, shouldAutoName } from "./names.js";
@@ -83,7 +85,7 @@ function icon(p, size, color) {
 
 export default class Agents extends View {
   init(_props, cx) {
-    if (props()?.sortMenu) return;
+    if (props()?.sortMenu || props()?.rowMenu) return;
     this.closed = false;
     if (props()?.rename) {
       this.handle = cx.focus_handle();
@@ -95,6 +97,13 @@ export default class Agents extends View {
       return;
     }
     this.folded = new Set();
+    this.configuredMachines = [];
+    if (props()?.tree && !checking()) {
+      this.refreshSidebarMachines(cx);
+      this.machineTimer = cx.timer.every(15000, cx => this.refreshSidebarMachines(cx));
+    }
+    try { this.folds = new Set(JSON.parse(localStorage.getItem("sidebar.tree.folds") ?? "[]")); }
+    catch { this.folds = new Set(); }
     // Each agent's last state and when it changed (ms), kept across restarts.
     this.changed = JSON.parse(localStorage.getItem("changed") ?? "{}");
     this.pendingPins = JSON.parse(localStorage.getItem("pins") ?? "[]");
@@ -124,6 +133,27 @@ export default class Agents extends View {
       this.todoTimer = cx.timer.every(2000, (cx) => this.refreshTodo(cx));
       this.refreshTodo(cx);
     }
+  }
+
+  refreshSidebarMachines(cx) {
+    if (this.readingMachines) return;
+    this.readingMachines = true;
+    cx.spawn(async cx => {
+      try {
+        const response = await hc(["machine","ls","--json"]);
+        if (!this.closed && response.code === 0) {
+          this.configuredMachines = (JSON.parse(response.stdout).machines ?? []).filter(m => !m.temporary && m.name);
+          cx.notify();
+        }
+      } catch { /* 保留上次已知机器，宿主仍提供在线布局。 */ }
+      finally { this.readingMachines = false; }
+    });
+  }
+
+  toggle(key,cx) {
+    if (this.folds.has(key)) this.folds.delete(key); else this.folds.add(key);
+    localStorage.setItem("sidebar.tree.folds", JSON.stringify([...this.folds]));
+    cx.notify();
   }
 
   todoPath() {
@@ -403,6 +433,20 @@ export default class Agents extends View {
     if (!result.ok) throw new Error("tab rename not echoed");
   }
 
+  openRowMenu(address) {
+    openOverlay({ mod: "agents-order", kind: "popup", width: 148, props: { rowMenu: address } });
+  }
+
+  rowMenu(t, address) {
+    const agent = agents().find(a => a.address === address);
+    const item = (label, action) => div().id(label).px(8).py(6).text_size(12.5).cursor_pointer()
+      .hover(el => el.bg(t.hover)).on_click(() => { closeOverlay(props().overlay); action(); }).child(label);
+    return v_flex().p(4).bg(t.raised)
+      .child(item("重命名", () => this.renameByAddress(address)))
+      .when(Boolean(agent), el => el.child(item(agent?.pinned ? "取消置顶" : "置顶",
+        () => run("terminal.pin", { terminal: address, pinned: !agent.pinned }))));
+  }
+
   renameButton(address, t) {
     return h_flex().id(`rename-${address}`).w(16).h(16).flex_none().items_center().justify_center()
       .text_color(t.dim).opacity(1).tooltip("修改任务名").cursor_pointer()
@@ -557,7 +601,7 @@ export default class Agents extends View {
     this.cancelDrag(cx);
     this.lastDragEnd = releaseTime(d, this.lastDragEnd ?? 0, Date.now());
     const current = new Map(agents().map(a => [a.address, a]));
-    d.valid = sortOf().id === "grouped" && d.members.every(a => {
+    d.valid = (props()?.tree || sortOf().id === "grouped") && d.members.every(a => {
       const live = current.get(a.address);
       return live?.space === d.space && !live.pinned;
     });
@@ -594,7 +638,9 @@ export default class Agents extends View {
   }
 
   close() {
+    this.spaceDrag = null;
     this.closed = true;
+    this.machineTimer?.cancel();
     this.renameFocusTimer?.cancel();
     for (const handle of this.renameWaitTimers ?? []) handle?.cancel?.();
     for (const resolve of this.renameWaitResolvers ?? []) resolve();
@@ -671,7 +717,8 @@ export default class Agents extends View {
       .text_size(12.5)
       .when(on, (el) => el.bg(t.raised))
       .hover((s) => s.bg(t.hover))
-      .on_hover((active, cx) => { this.hovered = active ? k.address : (this.hovered === k.address ? null : this.hovered); cx.notify(); })
+      .when(props()?.tree, el => el.on_mouse_down("right", (_e,cx) => { cx.stop_propagation(); this.openRowMenu(k.address); }))
+      .when(!props()?.tree, el => el.on_hover((active, cx) => { this.hovered = active ? k.address : null; cx.notify(); }))
       .on_click(() => (this.listed.has(k.address) ? run("pane.focus", { terminal: k.address }) : this.peek(k.address)))
       .children(s.lines.map(l => div().self_start().mt(-4).w(9).h(17).mr(4).flex_none()
         .when(Boolean(l), el => el.border_l(1.5).border_color(t.input))
@@ -680,12 +727,13 @@ export default class Agents extends View {
       .child(div().flex_1().min_w(0).truncate().tooltip(this.nameById?.get(k.address) || k.name || k.template || k.program?.name || k.address)
         .text_color(on ? t.foreground : t.muted)
         .child(this.nameById?.get(k.address) || k.name || k.template || k.program?.name || k.address))
-      .when(this.hovered === k.address, (el) => el.child(this.renameButton(k.address, t)))
+      .when(!props()?.tree && this.hovered === k.address, (el) => el.child(this.renameButton(k.address, t)))
       .child(this.hint({ ...k, status:st }));
   }
 
   render(cx) {
     const t = theme();
+    if (props()?.rowMenu) return this.rowMenu(t, props().rowMenu);
     if (props()?.sortMenu) return this.sortMenu(t);
     if (props()?.rename) return this.renameView();
     const collapsed = narrow();
@@ -706,7 +754,8 @@ export default class Agents extends View {
     list = list.filter((a) => a.pinned || !nested.has(a.address));
     const tabCounts = new Map();
     for (const a of list) tabCounts.set(a.tab, (tabCounts.get(a.tab) ?? 0) + 1);
-    const byPriority = sort.id === "priority";
+    const unified = Boolean(props()?.tree);
+    const byPriority = !unified && sort.id === "priority";
     const urgency = new Map(list.map((a) => [a.address, Math.max(this.rank(a), ...this.tree(all, a.address).map((s) => RANK[kidStatus(s.t, this.listed)] ?? 0))]));
     const rankOf = (a) => urgency.get(a.address);
     if (byPriority) list = [...list].sort((x, y) => rankOf(y) - rankOf(x) || this.since(y) - this.since(x) || y.seq - x.seq);
@@ -813,7 +862,7 @@ export default class Agents extends View {
         .child(svg(`mods/workspace-chrome/${isPinned ? "pin-off" : "pin"}.svg`).size(13));
       // Under a space header the space goes without saying; an automatic tab number says nothing.
       // Without a space header above (priority, pinned) the row names its space.
-      const full = byPriority || isPinned;
+      const full = !unified && (byPriority || isPinned);
       const storedName = this.nameById?.get(a.address) || "";
       const fallbackName = full ? a.space_name || label(a) : more ?? (/^\d+$/.test(label(a)) ? a.program?.name || label(a) : label(a));
       const name = storedName || fallbackName;
@@ -824,38 +873,49 @@ export default class Agents extends View {
         .flex_none()
         .rounded(8)
         .items_center()
-        .gap(9)
+        .gap(unified ? 7 : 9)
         .when(a.focused, (el) => el.bg(t.selected))
         .cursor_pointer()
         .hover((s) => s.bg(t.hover))
-        .on_hover((on, cx) => {
+        .when(unified, el => el.on_mouse_down("right", (_e,cx) => { cx.stop_propagation(); this.openRowMenu(a.address); }))
+        .when(!unified, el => el.on_hover((on, cx) => {
           if (on) this.hovered = a.address;
           else if (this.hovered === a.address) this.hovered = null;
           cx.notify();
-        })
+        }))
         .when(this.drag?.address === a.address, el => el.opacity(0.35))
         .when(this.drag?.space === a.space && this.drag?.target === i && this.drag?.address !== a.address && !isPinned,
           el => el.border_1().border_color(t.accent))
         .on_click(() => { if (Date.now() - (this.lastDragEnd ?? 0) > 300) run("pane.focus", { pane: a.pane }); })
-        .when(!byPriority && !isPinned && members.length > 1, el => el.child(
+        .when(unified, el => el.child(h_flex().id("handle-" + a.address).w(17).h_full().flex_none().items_center().justify_center()
+          .when(!isPinned && members.length > 1, slot => slot.cursor_grab().tooltip("按住拖动排序")
+            .on_hover((over,cx) => {
+              if (over) this.hoveredHandle = a.address;
+              else if (this.hoveredHandle === a.address) this.hoveredHandle = null;
+              cx.notify();
+            })
+            .on_mouse_down("left",(e,cx) => { cx.stop_propagation(); this.beginDrag(a,members,i,all,e,cx); }))
+          .child(showGrip(a, members.length, this.hoveredHandle)
+            ? svg("mods/agents-order/grip.svg").size(13).text_color(t.dim) : pic ?? div())))
+        .when(!unified && !byPriority && !isPinned && members.length > 1, el => el.child(
           h_flex().id(`drag-${a.address}`).w(17).h_full().flex_none().items_center().justify_center()
             .cursor_grab().tooltip("按住拖动排序")
             .on_mouse_down("left", (e, cx) => this.beginDrag(a, members, i, all, e, cx))
             .child(svg("mods/agents-order/grip.svg").size(13).text_color(t.dim))))
-        .when(Boolean(pic), el => el.child(div().id(`agent-fold-${a.address}`)
+        .when(!unified && Boolean(pic), el => el.child(div().id(`agent-fold-${a.address}`)
           .when(subs.length > 0, el => el.on_click((_e, cx) => {
             cx.stop_propagation();
             this.folded.has(a.address) ? this.folded.delete(a.address) : this.folded.add(a.address);
             cx.notify();
           })).child(pic)))
         .child(h_flex().flex_1().min_w(0).gap(5).items_center()
-          .child(div().min_w(0).max_w(full && more ? 120 : 200).truncate().tooltip(name).text_color(idle ? t.muted : t.foreground).child(name))
+          .child(div().min_w(0).when(!unified, el => el.max_w(full && more ? 120 : 200)).truncate().tooltip(name).text_color(idle ? t.muted : t.foreground).child(name))
           .when(full && Boolean(more), el => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(`\u00b7 ${more}`))))
-        .when(Boolean(machine), el => el.child(div().text_size(10).text_color(t.dim).child(machine)))
+        .when(!unified && Boolean(machine), el => el.child(div().text_size(10).text_color(t.dim).child(machine)))
         .when(subs.length > 0, el => el.child(fold(a, subs)))
-        .when(this.hovered === a.address, el => el.child(this.renameButton(a.address, t)))
-        .when(this.hovered === a.address, el => el.child(pin))
-        .when(!attention && this.hovered !== a.address && Boolean(when), el => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - when))))
+        .when(!unified && this.hovered === a.address, el => el.child(this.renameButton(a.address, t)))
+        .when(!unified && this.hovered === a.address, el => el.child(pin))
+        .when(!attention && (unified || this.hovered !== a.address) && Boolean(when), el => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - when))))
         .child(this.hint(a));
     };
 
@@ -910,7 +970,13 @@ export default class Agents extends View {
           .absolute().left(0).right(0).top(positions.get(a.address)).h(heights[a.address])
           .transition("top", 160).children(withKids(a, i, g.members))))];
     };
-    const rows = collapsed
+    const projects = spaces();
+    const tree = unified ? sidebarIndex(projects,list,this.rowItems.byAddress,a => this.tree(all,a.address).map(k => k.t)) : null;
+    const projectAgents = members => [
+      ...members.filter(a => a.pinned).flatMap((a,i) => withKids(a,i,[])),
+      ...groupRows({ id:"project", members:members.filter(a => !a.pinned) }),
+    ];
+    const rows = unified && !collapsed ? sidebarRows(t,projects,[...machines(),...this.configuredMachines],tree,this,projectAgents) : collapsed
       ? list.flatMap(withKids)
       : groups.flatMap((g) => [header(g), ...(this.folded.has(g.id) ? [] : groupRows(g))]);
 
@@ -919,17 +985,26 @@ export default class Agents extends View {
       .track_focus(this.focusHandle)
       .on_mouse_down("left", (e) => { if (e.bounds) this.rootBounds = e.bounds; })
       .on_mouse_move((e, cx) => { if (e.bounds) this.rootBounds = e.bounds; if (this.drag) this.moveDrag(e.position.y, cx); })
-      .on_mouse_up("left", (_e, cx) => this.finishDrag(cx))
+      .on_hover((over,cx) => { if (!over && this.spaceDrag) { this.spaceDrag = null; cx.notify(); } })
+      .on_mouse_up("left", (_e, cx) => {
+        if (this.spaceDrag) { this.spaceDrag = null; cx.notify(); }
+        this.finishDrag(cx);
+      })
       .on_mouse_down_out((_e, cx) => { if (this.drag) this.cancelDrag(cx); })
-      .on_key_down((e, cx) => { if (e.key === "escape" && this.drag) this.cancelDrag(cx); })
+      .on_key_down((e, cx) => { if (e.key === "escape") { this.spaceDrag = null; this.cancelDrag(cx); } })
       .size_full()
       .min_h(0)
       .bg(t.chrome)
       .border_t(1)
       .border_color(t.border)
       .text_size(13)
-      .when(!collapsed, (el) => el.child(this.modeHeaderView(t, sort)))
-      .when(list.length === 0 && !collapsed, (el) =>
+      .when(!collapsed && !unified, el => el.child(this.modeHeaderView(t,sort)))
+      .when(unified && !collapsed, el => el.child(h_flex().h(28).px(16).items_center().justify_end()
+        .child(div().id("manage-spaces").px(4).text_size(11).text_color(t.dim).cursor_pointer()
+          .tooltip("管理工作区和机器").on_click(() => openOverlay({mod:"compact-spaces",kind:"dialog",width:380,height:480,props:{manage:true}})).child("管理"))
+        .child(div().id("new-space").px(5).text_color(t.dim).cursor_pointer().tooltip("新建工作区")
+          .on_click(() => run("space.new")).child("+"))))
+      .when(list.length === 0 && !collapsed && !unified, (el) =>
         el.child(div().px(12).text_size(12).text_color(t.dim).child("No agent status yet. Agents show up here when they report their status. Older versions and agents inside tmux may not.")),
       )
       .when(this.error, el => el.child(div().px(12).py(4).text_size(11).text_color(t.blocked).child(this.error)))

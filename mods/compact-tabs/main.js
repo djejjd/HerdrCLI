@@ -1,4 +1,4 @@
-import { fitTabs, menuOrder, taskName, matches } from "./navigation.js";
+import { terminalTitles, fitTabs, menuOrder, taskName, matches } from "./navigation.js";
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, Input, InputState, ScrollHandle } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings, terminals, props, closeOverlay, setShared } from "herdr";
@@ -98,17 +98,25 @@ export default class Tabs extends View {
     localStorage.setItem("panels", JSON.stringify(this.panels));
   }
 
-  describe(tab) {
-    const lead = panes().find(p => p.tab === tab.id && p.program?.agent) ?? panes().find(p => p.tab === tab.id);
-    const term = terminals().find(t => t.address === lead?.terminal);
+  describe(tab, ps = panes(), ts = terminals()) {
+    const lead = ps.find(p => p.tab === tab.id && p.program?.agent) ?? ps.find(p => p.tab === tab.id);
+    const term = ts.find(t => t.address === lead?.terminal);
     const name = taskName(term?.labels?.["workbench.name"], label(tab, lead));
-    return { name, program: lead?.program, address: lead?.terminal };
+    const manual = tab.named ? tab.name : null;
+    return { id:tab.id, name, manual, shell: Boolean(lead?.program?.shell && !lead.program.agent),
+      cwd:lead?.cwd, program:lead?.program, address:lead?.terminal };
   }
 
-  results() {
-    const tabs = spaces().find(s => s.id === props().space)?.tabs ?? [];
+  descriptions(tabs) {
+    const ps = panes(), ts = terminals();
+    const entries = tabs.map(tab => this.describe(tab,ps,ts));
+    const titles = terminalTitles(entries);
+    return new Map(entries.map(entry => [entry.id,{...entry,name:titles.get(entry.id)}]));
+  }
+
+  results(tabs = spaces().find(s => s.id === props().space)?.tabs ?? [], descriptions = this.descriptions(tabs)) {
     return menuOrder(tabs, props().previous).filter(tab => {
-      const { name, program, address } = this.describe(tab);
+      const { name, program, address } = descriptions.get(tab.id);
       return matches([name, program?.name, address], this.input.value());
     });
   }
@@ -121,8 +129,10 @@ export default class Tabs extends View {
 
   picker(t) {
     const pins = shared("compact.tabs.pins") ?? [];
-    const rows = this.results().map(tab => {
-      const { name, address } = this.describe(tab);
+    const tabs = spaces().find(s => s.id === props().space)?.tabs ?? [];
+    const descriptions = this.descriptions(tabs);
+    const rows = this.results(tabs,descriptions).map(tab => {
+      const { name, address } = descriptions.get(tab.id);
       const pinned = pins.includes(tab.id);
       return h_flex().id("row-" + tab.id).min_h(32).px(6).gap(8).items_center().rounded(5)
         .hover(s => s.bg(t.hover)).cursor_pointer().on_click(() => this.choose(tab))
@@ -181,7 +191,7 @@ export default class Tabs extends View {
       this.history.set(space.id, recent);
     }
     const pins = shared("compact.tabs.pins") ?? [];
-    const descriptions = new Map(tabs.map(tab => [tab.id, this.describe(tab)]));
+    const descriptions = this.descriptions(tabs);
     const widths = new Map(tabs.map(tab => {
       const { name, program } = descriptions.get(tab.id);
       const text = Array.from(name).reduce((px, c) => px + (c.codePointAt(0) > 255 ? 14 : 8), 0);

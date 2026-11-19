@@ -6,7 +6,7 @@ import { spacesHeight } from "./height.js";
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
-import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
+import { spaces, machines, panes, run, openOverlay, exec, hc, theme, props, shared, setShared, watchFolder, window, layout } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -522,7 +522,7 @@ export default class Spaces extends View {
     const palette = ["ansi6", "ansi3", "ansi4", "ansi5", "ansi2", "ansi1"];
     const sp = spaces();
     const height = spacesHeight(sp.length, machines().length);
-    if (height !== this.requestedHeight) {
+    if (!props()?.manage && height !== this.requestedHeight) {
       this.requestedHeight = height;
       run("layout.resize", { id: "spaces", px: height });
     }

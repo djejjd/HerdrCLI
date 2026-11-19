@@ -39,3 +39,19 @@ export function menuOrder(tabs, previous) {
   const rank = tab => tab.active ? 0 : tab.id === previous ? 1 : 2;
   return [...tabs].sort((a,b) => rank(a) - rank(b));
 }
+
+// 显式名称优先；普通终端跟随工作目录，同名的自动标签补终端号。
+export function terminalTitles(entries) {
+  const titles = new Map(), counts = new Map();
+  for (const entry of entries) {
+    const dir = entry.cwd?.split(/[\\/]/).filter(Boolean).at(-1) || entry.cwd;
+    const title = entry.manual || (entry.shell && dir) || entry.name;
+    titles.set(entry.id,title);
+    counts.set(title,(counts.get(title) ?? 0) + 1);
+  }
+  for (const entry of entries) {
+    const title = titles.get(entry.id);
+    if (!entry.manual && counts.get(title) > 1 && entry.address) titles.set(entry.id,title + ' · ' + entry.address);
+  }
+  return titles;
+}

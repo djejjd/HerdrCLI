@@ -29,3 +29,15 @@ test('按每个标题的宽度决定溢出并保留活动标签', async () => {
   assert.deepEqual(fitTabs(list, [], ['c','b'], widths, 245), list.slice(1));
   assert.deepEqual(menuOrder(list,'b').map(t => t.id), ['c','b','a']);
 });
+
+test('未命名 shell 使用目录，同名补终端号，尊重手工标签和 Agent 任务名', async () => {
+  const {terminalTitles} = await import('../mods/compact-tabs/navigation.js');
+  const entries = [
+    {id:'a',shell:true,cwd:'/code/api',address:'t3',name:'zsh'},
+    {id:'b',shell:true,cwd:'C:\\Code\\api',address:'t4',name:'pwsh'},
+    {id:'c',shell:true,cwd:'/code/api',manual:'日志',name:'zsh'},
+    {id:'d',name:'编写测试',cwd:'/code/api',address:'t5'},
+    {id:'e',shell:true,cwd:'/',name:'zsh'},
+  ];
+  assert.deepEqual([...terminalTitles(entries).values()], ['api · t3','api · t4','日志','编写测试','/']);
+});
