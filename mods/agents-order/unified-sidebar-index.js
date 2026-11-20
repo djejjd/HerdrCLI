@@ -33,3 +33,24 @@ export function spaceMove(spaces, sourceId, targetId, after) {
   const to = siblings.filter(s => s !== source).indexOf(target) + Number(after);
   return from === to ? null : { id:source.id, index:to + 1 };
 }
+
+// 补入未上报状态、但前台进程确认为 OpenCode 的可见终端。
+export function sidebarAgents(reported, terminals, panes, spaces) {
+  const seen = new Set(reported.map(agent => agent.address));
+  const candidates = terminals.filter(term => term.state === 'live' && !seen.has(term.address)
+    && /^opencode(?:\.exe)?$/i.test(term.foreground?.name ?? ''));
+  if (!candidates.length) return reported;
+  const rows = [...reported];
+  for (const term of candidates) {
+    const pane = panes.find(item => item.terminal === term.address);
+    if (!pane) continue;
+    const space = spaces.find(item => item.tabs.some(tab => tab.id === pane.tab));
+    if (!space) continue;
+    const index = space.tabs.findIndex(tab => tab.id === pane.tab);
+    rows.push({address:term.address, pane:pane.pane, tab:pane.tab, space:space.id,
+      space_name:space.name, tab_index:index, tab_name:space.tabs[index].name,
+      status:'unknown', title:pane.title ?? '', focused:pane.focused, pinned:!!term.pinned,
+      seq:0, program:{key:'opencode',name:'OpenCode',icon:'icons/opencode.svg',tint:true,agent:true}});
+  }
+  return rows;
+}

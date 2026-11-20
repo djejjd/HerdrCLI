@@ -1,4 +1,4 @@
-import { sidebarIndex } from "./unified-sidebar-index.js";
+import { sidebarIndex, sidebarAgents } from "./unified-sidebar-index.js";
 import { sidebarRows } from "./tree-view.js";
 // Agents in grouped or priority views; parents take their most urgent sub-agent's place.
 
@@ -737,9 +737,9 @@ export default class Agents extends View {
     this.checkTabEchoes(cx);
     const collapsed = narrow();
     const sort = sortOf();
-    let list = agents();
-    this.listed = new Map(list.map((a) => [a.address, a.status]));
     const all = terminals();
+    let list = sidebarAgents(agents(), all, panes(), spaces());
+    this.listed = new Map(list.map((a) => [a.address, a.status]));
     this.nameById = new Map(all.map(t => [t.address, displayName(t.labels ?? {}, "")]));
     if (!checking()) this.scanAutoNames(all, cx);
     this.migratePins(all);

@@ -35,3 +35,16 @@ test('Space 落点按同机顺序计算，跨机、自身、消失目标均不�
   assert.deepEqual(spaceMove(list,'c','a',false),{id:'c',index:1});
   for (const target of ['a','b','remote/x','gone']) assert.equal(spaceMove(list,'a',target,false),null);
 });
+
+test('前台 OpenCode 随进程出现和退出，真实状态优先', async () => {
+  const { sidebarAgents } = await import('../mods/agents-order/unified-sidebar-index.js');
+  const terminal = {address:'t3k',state:'live',foreground:{name:'opencode'}};
+  const panes = [{terminal:'t3k',pane:'p',tab:'tab'}];
+  const spaces = [{id:'s',tabs:[{id:'tab',name:'my_opencode'}]}];
+  const rows = reported => sidebarAgents(reported,[terminal],panes,spaces);
+  assert.deepEqual(rows([]).map(a => [a.address,a.space,a.status]),[['t3k','s','unknown']]);
+  const native = {address:'t3k',status:'working'};
+  assert.deepEqual(rows([native]),[native]);
+  terminal.foreground.name = 'zsh';
+  assert.deepEqual(rows([]),[]);
+});
