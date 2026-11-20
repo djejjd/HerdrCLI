@@ -2,7 +2,7 @@
 import { div, svg } from 'gpui-kit';
 import { h_flex, v_flex } from 'gpui-base';
 import { run, openOverlay, spaces as liveSpaces } from 'herdr';
-import { machineNames, spaceMove } from './unified-sidebar-index.js';
+import { machineNames, machineAction, spaceMove } from './unified-sidebar-index.js';
 
 const keyOf = (type, id) => JSON.stringify([type,id]);
 const chevron = (open, t) => svg('mods/workspace-chrome/chevron-' + (open ? 'down' : 'right') + '.svg')
@@ -71,14 +71,20 @@ export function sidebarRows(t, spaces, machineList, tree, view, drawAgents) {
   if (!names.length) { spaces.forEach(addSpace); return rows; }
   for (const name of names) {
     const key = keyOf('machine',name), open = !view.folds.has(key);
+    const action = machineAction(name, machineList);
     const count = tree.pending.get(name) ?? 0;
     rows.push(row().id(key).rounded(5).cursor_pointer().hover(el => el.bg(t.hover))
       .on_click((_e,cx) => view.toggle(key,cx))
       .child(lead().child(chevron(open,t)))
       .child(div().flex_1().min_w(0).truncate().text_size(12).font_semibold().text_color(t.foreground).child(name ?? '本机'))
       .when(!open && count > 0, el => el.child(countLabel(count,t)))
-      .when(open, el => el.child(div().id('new-' + key).px(4).text_color(t.dim).tooltip('新建工作区')
-        .on_click((_e,cx) => { cx.stop_propagation(); run('space.new',{machine:name ?? ''}); }).child('+'))));
+      .child(div().id('action-' + key).px(5).text_color(t.muted)
+        .tooltip(action === '+' ? '新建工作区' : '打开机器连接设置')
+        .on_click((_e,cx) => {
+          cx.stop_propagation();
+          if (action === '+') run('space.new',{machine:name ?? ''});
+          else run('app.settings',{section:'machines'});
+        }).child(action)));
     if (!open) continue;
     const projects = spaces.filter(s => (s.machine ?? null) === name);
     projects.forEach(addSpace);

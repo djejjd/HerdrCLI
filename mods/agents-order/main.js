@@ -145,6 +145,8 @@ export default class Agents extends View {
         const response = await hc(["machine","ls","--json"]);
         if (!this.closed && response.code === 0) {
           this.configuredMachines = (JSON.parse(response.stdout).machines ?? []).filter(m => !m.temporary && m.name);
+          const remote = this.configuredMachines.length > 0;
+          if (Boolean(shared("sidebar.hasRemoteMachines")) !== remote) setShared("sidebar.hasRemoteMachines", remote);
           cx.notify();
         }
       } catch { /* 保留上次已知机器，宿主仍提供在线布局。 */ }
@@ -998,11 +1000,6 @@ export default class Agents extends View {
       .border_color(t.border)
       .text_size(13)
       .when(!collapsed && !unified, el => el.child(this.modeHeaderView(t,sort)))
-      .when(unified && !collapsed, el => el.child(h_flex().h(28).px(16).items_center().justify_end()
-        .child(div().id("manage-spaces").px(4).text_size(11).text_color(t.dim).cursor_pointer()
-          .tooltip("管理工作区和机器").on_click(() => openOverlay({mod:"compact-spaces",kind:"dialog",width:380,height:480,props:{manage:true}})).child("管理"))
-        .child(div().id("new-space").px(5).text_color(t.dim).cursor_pointer().tooltip("新建工作区")
-          .on_click(() => run("space.new")).child("+"))))
       .when(list.length === 0 && !collapsed && !unified, (el) =>
         el.child(div().px(12).text_size(12).text_color(t.dim).child("No agent status yet. Agents show up here when they report their status. Older versions and agents inside tmux may not.")),
       )
