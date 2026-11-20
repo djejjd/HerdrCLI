@@ -54,3 +54,11 @@ export function sidebarAgents(reported, terminals, panes, spaces) {
   }
   return rows;
 }
+
+export function machineAction(name, machines) {
+  if (!name) return '+';
+  const state = machines.find(machine => machine.name === name && machine.state)?.state;
+  if (state === 'needs_login') return '需登录';
+  const ready = machines.some(machine => machine.name === name && machine.layout === 'ready');
+  return (state ? state === 'connected' : ready) ? '+' : '重连';
+}

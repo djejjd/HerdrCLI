@@ -48,3 +48,11 @@ test('前台 OpenCode 随进程出现和退出，真实状态优先', async () =
   terminal.foreground.name = 'zsh';
   assert.deepEqual(rows([]),[]);
 });
+
+test('机器行按连接状态显示创建、登录或重连入口', async () => {
+  const { machineAction } = await import('../mods/agents-order/unified-sidebar-index.js');
+  assert.equal(machineAction(null, []), '+');
+  assert.equal(machineAction('dev', [{name:'dev',layout:'ready'}]), '+');
+  assert.equal(machineAction('dev', [{name:'dev',layout:'ready'}, {name:'dev',state:'needs_login'}]), '需登录');
+  assert.equal(machineAction('dev', [{name:'dev',layout:'unavailable'}]), '重连');
+});
