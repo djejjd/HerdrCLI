@@ -4,7 +4,10 @@ import { promisify } from 'node:util';
 import { readdir, open } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { codexSessionQuery, modelRoute } from './model.js';
+
+const execute = promisify(execFile);
 
 const address = process.argv[2];
 const base = new URL('http://127.0.0.1:3425/v1/magpie/');
@@ -38,24 +41,37 @@ async function ompModel(id) {
   } finally { await file.close(); }
 }
 
+async function codexIdentity() {
+  const terminal = JSON.parse((await execute('hc', ['get', address], {timeout:1800})).stdout);
+  if (terminal.state !== 'live' || terminal.foreground?.name !== 'codex') return null;
+  const pid = terminal.foreground.pid;
+  const start = await execute('ps', ['-p', String(pid), '-o', 'lstart='], {timeout:1000});
+  const started = Math.floor(Date.parse(start.stdout.trim()) / 1000);
+  const root = join(homedir(), '.codex');
+  const state = pathToFileURL(join(root, 'state_5.sqlite')).href.replaceAll("'", "''");
+  const sql = "ATTACH DATABASE '" + state + "?mode=ro' AS state; " + codexSessionQuery(pid, started);
+  const {stdout} = await execute('sqlite3', ['-readonly', '-json', join(root, 'logs_2.sqlite'), sql], {timeout:1500});
+  const records = JSON.parse(stdout || '[]');
+  return records.length === 1 ? {...records[0],program:'codex'} : null;
+}
+
+async function verifiedIdentity() {
+  const native = await codexIdentity().catch(() => null);
+  if (native) return native;
+  const script = fileURLToPath(new URL('../agents-order/session.mjs', import.meta.url));
+  const result = await execute(process.execPath, [script, 'verify', address], {timeout:4000});
+  const identity = JSON.parse(result.stdout);
+  return identity.ok ? identity : null;
+}
+
 async function readRoute() {
   if (!/^t[a-z0-9]+$/i.test(address ?? '')) return null;
-  const script = fileURLToPath(new URL('../agents-order/session.mjs', import.meta.url));
   try {
-    const result = await promisify(execFile)(process.execPath, [script, 'verify', address], {timeout:5000});
-    const identity = JSON.parse(result.stdout);
-    if (!identity.ok || !identity.sessionId) return null;
+    const identity = await verifiedIdentity();
+    if (!identity?.sessionId) return null;
     const resultRoute = await get('route?' + new URLSearchParams({session:identity.sessionId})).catch(() => null);
-    const route = resultRoute?.route;
-    if (!route) {
-      const model = identity.program === 'omp' ? await ompModel(identity.sessionId) : null;
-      return model ? {model, provider:null, account:null} : null;
-    }
-    const target = typeof route.model === 'string' ? route.model : '';
-    const slash = target.indexOf('/');
-    return {model:slash >= 0 ? target.slice(slash + 1) : target || route.asked,
-      provider:slash >= 0 ? target.slice(0, slash) : null,
-      account:typeof route.served?.account === 'string' ? route.served.account : null};
+    const model = identity.program === 'omp' ? await ompModel(identity.sessionId).catch(() => null) : identity.model;
+    return modelRoute(model, resultRoute?.route);
   } catch { return null; }
 }
 

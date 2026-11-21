@@ -2,7 +2,7 @@ import { View, div, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { spaces, agents, theme, run, window, keys, props, focused, terminals, exec, checking, appHome, openOverlay } from "herdr";
 
-import { quotaSelection, quotaLines } from './model.js';
+import { quotaSelection, quotaReadings } from './model.js';
 
 export default class WorkspaceStatus extends View {
   init(_props, cx) {
@@ -43,25 +43,51 @@ export default class WorkspaceStatus extends View {
     });
   }
 
+  readingsView(t, readings, details = false) {
+    const row = h_flex().gap(4).items_center().text_color(t.muted);
+    readings.forEach((reading, index) => {
+      if (index) row.child(div().text_color(t.dim).child('·'));
+      row.child(div().child(reading.label))
+        .child(div().text_color(reading.low ? t.blocked : t.foreground)
+          .when(reading.low, el => el.font_semibold()).child(reading.value));
+      const reset = new Date(reading.reset ?? '');
+      if (details && Number.isFinite(reset.getTime())) {
+        row.child(div().text_color(t.dim).child(reset.toLocaleString() + ' 重置'));
+      }
+    });
+    return row;
+  }
+
   detailPanel(t, data) {
     const panel = v_flex().size_full().px(14).py(10).gap(7).overflow_y_scrollbar()
       .bg(t.popover).text_color(t.foreground).text_size(12);
     const caption = text => div().text_color(t.muted).child(text);
-    const draw = card => {
-      const stamp = new Date(card.readAt ?? '');
-      const row = v_flex().gap(3).child(div().font_semibold().child(card.alias || card.name || card.provider || '额度'));
-      for (const line of quotaLines(card, true)) row.child(caption(line));
-      if (card.error) row.child(caption('额度读取失败'));
-      if (Number.isFinite(stamp.getTime())) row.child(caption('更新于 ' + stamp.toLocaleString()));
-      return row;
+    const cardName = card => card.alias || card.name || card.provider || '额度';
+    const compactRow = card => {
+      const readings = quotaReadings(card).slice(0, 2);
+      return h_flex().gap(10).items_center()
+        .child(div().flex_1().min_w(0).truncate().child(cardName(card)))
+        .child(readings.length ? this.readingsView(t, readings) : caption('暂无读数'));
     };
-    panel.child(div().font_semibold().child('当前终端 · ' + data.model));
-    for (const card of data.candidates) panel.child(draw(card));
-    if (!data.candidates.length) panel.child(caption('当前终端的额度归属待确认'));
-    panel.child(div().pt(5).font_semibold().child('其他模型与额度'));
-    for (const card of data.others) panel.child(draw(card));
-    if (!data.others.length) panel.child(caption('暂无其他额度'));
-    if (data.stale) panel.child(caption('Magpie 暂不可用'));
+    panel.child(div().font_semibold().child(data.model));
+    const related = data.candidates;
+    const current = data.current ?? data.reference;
+    if (current) {
+      const heading = cardName(current) + (data.current ? '' : ' · 关联订阅');
+      panel.child(caption(heading));
+      const readings = quotaReadings(current).slice(0, 2);
+      for (const reading of readings) panel.child(this.readingsView(t, [reading], true));
+      if (!readings.length) panel.child(caption('暂无读数'));
+    } else if (related.length) {
+      panel.child(caption('关联账号'));
+      for (const card of related) panel.child(compactRow(card));
+    } else panel.child(caption('当前模型暂无匹配额度'));
+    const others = data.others;
+    if (others.length) {
+      panel.child(div().mt(3).pt(6).border_t(1).border_color(t.border).text_color(t.muted).child('其他额度'));
+      for (const card of others) panel.child(compactRow(card));
+    }
+    if (data.stale) panel.child(caption('Magpie 离线 · 显示缓存'));
     return panel;
   }
 
@@ -74,13 +100,17 @@ export default class WorkspaceStatus extends View {
     const named = argv.find(arg => typeof arg === 'string' && arg.startsWith('--model='))?.slice(8);
     const model = route?.model || terminal?.report?.model || named || (flag >= 0 && argv[flag + 1]) || '模型待识别';
     const selection = quotaSelection(this.cards, route?.provider, route?.account);
-    const lines = selection.current && !selection.current.error ? quotaLines(selection.current) : [];
-    const summary = lines.length ? lines.join(' · ') : '查看额度';
+    const card = selection.current ?? selection.reference;
+    const readings = card ? quotaReadings(card).slice(0, 2) : [];
     const data = {...selection, model, stale:this.stale};
-    return div().id('magpie-quota').max_w(360).truncate().cursor_pointer().text_color(t.foreground)
-      .tooltip('查看当前终端及其他模型额度')
-      .on_click(() => openOverlay({mod:'magpie-status', kind:'popup', width:350, height:340, props:{details:data}}))
-      .child(model + ' · ' + summary + (lines.length && this.stale ? '（缓存）' : '') + ' ▴');
+    return h_flex().id('magpie-quota').max_w(440).min_w(0).gap(6).items_center().cursor_pointer()
+      .tooltip(selection.reference ? '额度来源：' + (card.alias || card.name || card.provider) : '查看当前终端及其他模型额度')
+      .on_click(() => openOverlay({mod:'magpie-status', kind:'popup', width:330, height:Math.min(380, 150 + this.cards.length * 23), props:{details:data}}))
+      .child(div().min_w(0).truncate().text_color(t.muted).child(model))
+      .child(readings.length ? this.readingsView(t, readings).flex_none() : div().text_color(t.dim).child('额度待确认'))
+      .when(Boolean(readings.length && this.stale), el => el.child(div().text_color(t.dim).child('缓存')))
+      .child(div().text_color(t.dim).child('▴'));
+
   }
 
   // The palette key as actually bound, not a hardcoded one; without a
@@ -102,12 +132,12 @@ export default class WorkspaceStatus extends View {
     const needs = list.filter(a => a.status === "blocked").length;
     const label = (icon, text) => h_flex().gap(6).items_center().child(svg(`mods/workspace-chrome/${icon}.svg`).size(13)).child(text);
     return h_flex().size_full().px(14).gap(16).items_center().bg(t.chrome).border_t(1).border_color(t.border).text_size(11.8).text_color(t.muted)
-      .child(label(space?.machine ? "server" : "monitor", space?.machine ?? "This computer"))
+      .child(this.quotaButton(t))
+      .when(Boolean(space?.machine), el => el.child(label("server", space.machine)))
       .when(Boolean(space?.branch), el => el.child(label("branch", space.branch)))
       .child(h_flex().gap(6).items_center().child(div().size(6).rounded(3).bg(t.dim)).child(`${list.length} agents`)
         .when(needs > 0, el => el.child(div().text_color(t.blocked).child(`· ${needs} needs you`))))
       .child(div().flex_1())
-      .child(this.quotaButton(t))
       .child(div().id("palette").text_color(t.dim).on_click(() => run("app.palette")).child(this.hint(t)));
   }
 }
