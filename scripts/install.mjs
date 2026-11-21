@@ -5,11 +5,12 @@ import { resolve } from 'node:path';
 import { patchLayout } from './notify-layout.mjs';
 const target=resolve(homedir(),'.config/herdr-app');
 const base=JSON.parse(await readFile(resolve(target,'layouts/verified-main.json'),'utf8'));
-for(const name of ['agent-workbench','workbench-pane','workbench-tabs','workbench-menu','workspace-chrome','notify','notify-toast']) {
+for(const name of ['agent-workbench','agents-order','magpie-status','workbench-pane','workbench-tabs','workbench-menu','workspace-chrome','notify','notify-toast']) {
   await mkdir(resolve(target,'mods',name),{recursive:true});
   await cp(resolve('mods',name),resolve(target,'mods',name),{recursive:true});
 }
 function update(node) {
+  if(node.content?.mod==='workspace-status')node.content.mod='magpie-status';
   if(node.content?.mod==='verified-tabs')node.content.mod='workbench-tabs';
   if(node.content?.mod==='agents')node.content.mod='agent-workbench';
   if(node.content?.pane?.header)node.content.pane.header={content:{mod:'workbench-pane'},height:28,position:'top',reveal:'hover'};
