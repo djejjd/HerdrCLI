@@ -54,3 +54,15 @@ test('主会话使用 Astra 时，子 Agent 的 DeepSeek 请求不会替换模�
   assert.deepEqual(modelRoute('magpie/deepseek/deepseek-flash', null),
     {model:'deepseek-flash',provider:'deepseek',account:null});
 });
+
+test('刷新空结果保留同一进程读数，不借用其他终端或重启进程的额度', async () => {
+  const {modelReadingKey, rememberModelReading} = await import('../mods/magpie-status/model.js');
+  const key = (address,pid) => modelReadingKey({address,foreground:{pid}});
+  const cache = new Map();
+  const original = {model:'gpt'};
+  rememberModelReading(cache,key('t1',12),original);
+  rememberModelReading(cache,key('t1',12),null);
+  assert.equal(cache.get(key('t1',12)),original);
+  assert.equal(cache.get(key('t2',12)),undefined);
+  assert.equal(cache.get(key('t1',13)),undefined);
+});

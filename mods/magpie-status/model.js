@@ -65,3 +65,15 @@ export function modelRoute(sessionModel, route) {
     account:matching && typeof route?.served?.account === 'string' ? route.served.account : null,
   };
 }
+
+export function modelReadingKey(terminal) {
+  return terminal?.address && terminal.foreground?.pid
+    ? JSON.stringify([terminal.address, terminal.foreground.pid]) : null;
+}
+
+export function rememberModelReading(cache, key, route) {
+  if (!key || !route?.model) return;
+  cache.delete(key);
+  cache.set(key, route);
+  if (cache.size > 64) cache.delete(cache.keys().next().value);
+}

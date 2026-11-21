@@ -2,11 +2,12 @@ import { View, div, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { spaces, agents, theme, run, window, keys, props, focused, terminals, exec, checking, appHome, openOverlay } from "herdr";
 
-import { quotaSelection, quotaReadings } from './model.js';
+import { quotaSelection, quotaReadings, modelReadingKey, rememberModelReading } from './model.js';
 
 export default class WorkspaceStatus extends View {
   init(_props, cx) {
     this.cards = [];
+    this.modelReadings = new Map();
     this.stale = true;
     if (!props()?.details && !checking()) this.refreshTimer = cx.timer.every(1000, cx => this.refresh(cx));
   }
@@ -18,9 +19,10 @@ export default class WorkspaceStatus extends View {
 
   refresh(cx) {
     const address = focused()?.terminal ?? '';
-    if (address !== this.address) {
+    const key = modelReadingKey(terminals().find(terminal => terminal.address === address));
+    if (address !== this.address || key !== this.readingKey) {
       this.address = address;
-      this.route = null;
+      this.readingKey = key;
       this.nextRead = 0;
       cx.notify();
     }
@@ -34,7 +36,7 @@ export default class WorkspaceStatus extends View {
         const snapshot = JSON.parse(result.stdout);
         this.stale = !snapshot.cards;
         if (snapshot.cards) this.cards = snapshot.cards;
-        if (address === this.address) this.route = snapshot.route;
+        rememberModelReading(this.modelReadings, key, snapshot.route);
       } catch { this.stale = true; }
       finally {
         this.busy = false;
@@ -94,20 +96,20 @@ export default class WorkspaceStatus extends View {
   quotaButton(t) {
     const address = focused()?.terminal;
     const terminal = terminals().find(item => item.address === address);
-    const route = this.address === address ? this.route : null;
+    const route = this.modelReadings.get(modelReadingKey(terminal));
     const argv = terminal?.foreground?.argv ?? [];
     const flag = argv.indexOf('--model');
     const named = argv.find(arg => typeof arg === 'string' && arg.startsWith('--model='))?.slice(8);
-    const model = route?.model || terminal?.report?.model || named || (flag >= 0 && argv[flag + 1]) || '模型待识别';
+    const model = route?.model || terminal?.report?.model || named || (flag >= 0 && argv[flag + 1]) || '';
     const selection = quotaSelection(this.cards, route?.provider, route?.account);
     const card = selection.current ?? selection.reference;
     const readings = card ? quotaReadings(card).slice(0, 2) : [];
-    const data = {...selection, model, stale:this.stale};
+    const data = {...selection, model:model || '当前终端', stale:this.stale};
     return h_flex().id('magpie-quota').max_w(440).min_w(0).gap(6).items_center().cursor_pointer()
       .tooltip(selection.reference ? '额度来源：' + (card.alias || card.name || card.provider) : '查看当前终端及其他模型额度')
       .on_click(() => openOverlay({mod:'magpie-status', kind:'popup', width:330, height:Math.min(380, 150 + this.cards.length * 23), props:{details:data}}))
-      .child(div().min_w(0).truncate().text_color(t.muted).child(model))
-      .child(readings.length ? this.readingsView(t, readings).flex_none() : div().text_color(t.dim).child('额度待确认'))
+      .when(Boolean(model), el => el.child(div().min_w(0).truncate().text_color(t.muted).child(model)))
+      .child(readings.length ? this.readingsView(t, readings).flex_none() : div().text_color(t.dim).child('额度'))
       .when(Boolean(readings.length && this.stale), el => el.child(div().text_color(t.dim).child('缓存')))
       .child(div().text_color(t.dim).child('▴'));
 
