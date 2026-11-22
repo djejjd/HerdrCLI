@@ -4,10 +4,23 @@ import { spaces, agents, theme, run, window, keys, props, focused, terminals, ex
 
 import { quotaSelection, quotaReadings, modelReadingKey, rememberModelReading } from './model.js';
 
+// 只展示固定短语，避免把子进程响应中的自由文本带进弹窗。
+const failureStages = new Map([
+  ['worker', '额度读取进程'], ['quota', '额度'], ['terminal', '本地终端'],
+  ['codex-process', 'Codex 进程'], ['codex-session', 'Codex 主会话'],
+  ['session', '终端会话'], ['route', '路由'], ['omp-model', 'OMP 模型'],
+]);
+const failureReasons = new Map([
+  ['timeout', '读取超时'], ['invalid-response', '响应无效'], ['not-found', '尚未确认'],
+  ['http-error', '服务响应失败'], ['unavailable', '读取失败'],
+]);
+
 export default class WorkspaceStatus extends View {
   init(_props, cx) {
     this.cards = [];
     this.modelReadings = new Map();
+    this.quotaFailures = [];
+    this.routeFailures = [];
     this.stale = true;
     if (!props()?.details && !checking()) this.refreshTimer = cx.timer.every(1000, cx => this.refresh(cx));
   }
@@ -30,15 +43,30 @@ export default class WorkspaceStatus extends View {
     this.busy = true;
     this.nextRead = Date.now() + 15000;
     cx.spawn(async cx => {
+      let reason = 'unavailable';
       try {
-        const result = await exec('node', [appHome() + '/mods/magpie-status/read.mjs', address], {timeout:8500});
+        // 给本地身份检查、会话回退和随后路由查询留出各自的超时时间。
+        const result = await exec('node', [appHome() + '/mods/magpie-status/read.mjs', address], {timeout:12000});
         if (result.code !== 0) throw new Error('quota read failed');
+        reason = 'invalid-response';
         const snapshot = JSON.parse(result.stdout);
+        if (!snapshot || (snapshot.cards !== null && !Array.isArray(snapshot.cards))) throw new Error('invalid quota response');
         this.stale = !snapshot.cards;
         if (snapshot.cards) this.cards = snapshot.cards;
+        const failures = Array.isArray(snapshot.failures) ? snapshot.failures
+          .filter(item => failureStages.has(item?.stage) && failureReasons.has(item.reason))
+          .map(({stage, reason}) => ({stage, reason})) : [];
+        this.quotaFailures = failures.filter(item => item.stage === 'quota');
+        this.routeFailures = failures.filter(item => item.stage !== 'quota');
         rememberModelReading(this.modelReadings, key, snapshot.route);
-      } catch { this.stale = true; }
+      } catch {
+        this.stale = true;
+        this.quotaFailures = [{stage:'worker', reason}];
+        this.routeFailures = [];
+      }
       finally {
+        this.failureAddress = address;
+        this.failureKey = key;
         this.busy = false;
         if (!this.closed) cx.notify();
       }
@@ -89,14 +117,21 @@ export default class WorkspaceStatus extends View {
       panel.child(div().mt(3).pt(6).border_t(1).border_color(t.border).text_color(t.muted).child('其他额度'));
       for (const card of others) panel.child(compactRow(card));
     }
-    if (data.stale) panel.child(caption('Magpie 离线 · 显示缓存'));
+    if (data.stale && data.hasCards) panel.child(caption('显示额度缓存'));
+    for (const {stage, reason} of data.failures ?? []) {
+      if (failureStages.has(stage) && failureReasons.has(reason)) {
+        const suffix = stage === 'worker' && reason === 'unavailable' ? '失败' : failureReasons.get(reason);
+        panel.child(caption(failureStages.get(stage) + suffix));
+      }
+    }
     return panel;
   }
 
   quotaButton(t) {
     const address = focused()?.terminal;
     const terminal = terminals().find(item => item.address === address);
-    const route = this.modelReadings.get(modelReadingKey(terminal));
+    const key = modelReadingKey(terminal);
+    const route = this.modelReadings.get(key);
     const argv = terminal?.foreground?.argv ?? [];
     const flag = argv.indexOf('--model');
     const named = argv.find(arg => typeof arg === 'string' && arg.startsWith('--model='))?.slice(8);
@@ -104,7 +139,9 @@ export default class WorkspaceStatus extends View {
     const selection = quotaSelection(this.cards, route?.provider, route?.account);
     const card = selection.current ?? selection.reference;
     const readings = card ? quotaReadings(card).slice(0, 2) : [];
-    const data = {...selection, model:model || '当前终端', stale:this.stale};
+    const routeFailures = address === this.failureAddress && key === this.failureKey ? this.routeFailures : [];
+    const data = {...selection, model:model || '当前终端', stale:this.stale, hasCards:this.cards.length > 0,
+      failures:[...this.quotaFailures, ...routeFailures]};
     return h_flex().id('magpie-quota').max_w(440).min_w(0).gap(6).items_center().cursor_pointer()
       .tooltip(selection.reference ? '额度来源：' + (card.alias || card.name || card.provider) : '查看当前终端及其他模型额度')
       .on_click(() => openOverlay({mod:'magpie-status', kind:'popup', width:330, height:Math.min(380, 150 + this.cards.length * 23), props:{details:data}}))
