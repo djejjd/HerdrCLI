@@ -84,3 +84,11 @@ test('切换到分屏只放大一次，单窗和重复选择保持焦点', async
   assert.equal(needsSinglePane(split,'p1'),true);
   assert.equal(needsSinglePane(split,'p2'),false);
 });
+
+test('仅当前 Space 显示创建动作，切换后目标跟随', async () => {
+  const { terminalAction } = await import('../mods/agents-order/unified-sidebar-index.js');
+  for (const active of ['a','b']) {
+    const actions = ['a','b'].map(id => terminalAction({id,active:id === active})).filter(Boolean);
+    assert.deepEqual(actions, [{space:active}]);
+  }
+});
