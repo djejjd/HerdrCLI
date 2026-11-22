@@ -819,7 +819,8 @@ export default class Agents extends View {
     this.localAgentTerms = new Map(all.map(t => [t.address,t]));
     const virtual = new Map();
     if (unified && !collapsed) for (const term of all) {
-      virtual.set(term.address,visibleChildren(childRows(childPacketFor(term,this.childPackets),term.foreground?.pid),term.labels?.['workbench.received.v1']));
+      const packet = childPacketFor(term,this.childPackets);
+      virtual.set(term.address,visibleChildren(childRows(packet,term.foreground?.pid),term.labels?.['workbench.received.v1'],term,packet));
     }
     const virtualRow = (kid, index, siblings) => {
       const names = {working:'运行中',permission:'待授权',reply:'待回应',review:'待审核',idle:'空闲',blocked:'阻塞',unknown:'状态未知',completed:'本轮已完成'};
