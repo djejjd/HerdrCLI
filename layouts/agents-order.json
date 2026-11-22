@@ -167,7 +167,7 @@
             "px": 28
           },
           "content": {
-            "mod": "workspace-status"
+            "mod": "magpie-status"
           }
         }
       ]
