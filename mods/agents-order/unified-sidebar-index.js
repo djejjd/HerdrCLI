@@ -73,3 +73,8 @@ export function needsSinglePane(snapshot, id) {
   const target = snapshot.find(pane => pane.pane === id);
   return Boolean(target && !target.zoomed && snapshot.some(pane => pane.tab === target.tab && pane.pane !== id));
 }
+
+// 仅当前 Space 提供新建终端所需的命令参数。
+export function terminalAction(space) {
+  return space.active ? {space:space.id} : null;
+}

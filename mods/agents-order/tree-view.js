@@ -2,7 +2,7 @@
 import { div, svg } from 'gpui-kit';
 import { h_flex, v_flex } from 'gpui-base';
 import { run, openOverlay, spaces as liveSpaces } from 'herdr';
-import { machineProjects, machineNames, machineAction, spaceMove } from './unified-sidebar-index.js';
+import { machineProjects, machineNames, machineAction, terminalAction, spaceMove } from './unified-sidebar-index.js';
 
 const keyOf = (type, id) => JSON.stringify([type,id]);
 const chevron = (open, t) => svg('mods/workspace-chrome/chevron-' + (open ? 'down' : 'right') + '.svg')
@@ -21,6 +21,7 @@ export function sidebarRows(t, spaces, machineList, tree, view, drawAgents) {
     const members = tree.members.get(s.id) ?? [], count = tree.perSpace.get(s.id) ?? 0;
     const drag = view.spaceDrag;
     const mark = drag?.moved && drag.target === s.id;
+    const target = terminalAction(s);
     const header = row().id('project-' + s.id).h(26).rounded(4)
       .hover(el => el.bg(t.hover))
       .on_mouse_down('right',(_e,cx) => { cx.stop_propagation(); openOverlay({mod:'menu',kind:'popup',width:200,props:{tab:'space',target:{id:s.id,space:s.id}}}); })
@@ -35,6 +36,10 @@ export function sidebarRows(t, spaces, machineList, tree, view, drawAgents) {
         .child(svg('mods/workspace-chrome/folder.svg').size(14).flex_none().text_color(t.muted))
         .child(div().truncate().font_semibold().text_size(12)
         .text_color(t.muted).tooltip(s.name).child(s.name)))
+      .when(Boolean(target), el => el.child(div().id('new-terminal-' + s.id).size(22).flex_none()
+        .flex().items_center().justify_center().rounded(4).cursor_pointer().text_color(t.muted)
+        .hover(style => style.bg(t.hover).text_color(t.foreground)).tooltip('在当前 Space 新建终端')
+        .on_click((_e,cx) => { cx.stop_propagation(); run('tab.new',target); }).child('+')))
       .when(!open && count > 0, el => el.child(countLabel(count,t)));
     const group = v_flex().id('space-group-' + s.id).relative().mt(6).flex_none()
       .on_mouse_move((e,cx) => {
