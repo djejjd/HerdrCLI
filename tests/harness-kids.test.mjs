@@ -75,7 +75,7 @@ with tempfile.TemporaryDirectory() as fixture:
     root = pathlib.Path(fixture)
     mod.ROOT = root
     mod.subprocess.check_output = lambda *args, **kwargs: 'Sun Nov 22 09:00:00 2026'
-    for file, payload in [('parent',{'type':'task_started'}),('good',{'type':'task_complete'}),('bad',[])]:
+    for file, payload in [('parent',{'type':'task_started'}),('good',{'type':'task_complete','turn_id':'a-turn'}),('bad',[])]:
         (root/file).write_text(json.dumps({'type':'event_msg','payload':payload}))
     with closing(sqlite3.connect(root/'logs_2.sqlite')) as logs:
         logs.execute('CREATE TABLE logs(thread_id, process_uuid, ts)')
@@ -93,14 +93,18 @@ with tempfile.TemporaryDirectory() as fixture:
         ])
         state.commit()
         good = mod.snapshot(12)
+        (root/'good').write_text(json.dumps({'type':'event_msg','payload':{'type':'task_complete','turn_id':'new-turn'}}))
+        newer = mod.snapshot(12)
         state.execute('DROP TABLE thread_spawn_edges')
         state.commit()
         failed = mod.snapshot(12)
-        print(json.dumps([good,failed]))
+        print(json.dumps([good,newer,failed]))
 `,reader],{encoding:'utf8'});
-  const [ok, failed] = JSON.parse(run);
+  const [ok, newer, failed] = JSON.parse(run);
   assert.equal(ok.stage,'ready');
   assert.match(ok.identity,/^[a-f0-9]{32}$/);
   assert.deepEqual(ok.children.map(child => [child.id,child.state]),[['bad','unknown'],['good','completed']]);
+  assert.ok(Number.isSafeInteger(ok.children[1].revision));
+  assert.notEqual(newer.children[1].revision,ok.children[1].revision);
   assert.deepEqual(failed,{stage:'children',identity:ok.identity,children:[]});
 });
