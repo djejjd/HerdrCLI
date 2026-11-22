@@ -1,3 +1,4 @@
+import { childRows } from './harness-kids.js';
 import { sidebarIndex, sidebarAgents, needsSinglePane } from "./unified-sidebar-index.js";
 import { sidebarRows } from "./tree-view.js";
 // Agents in grouped or priority views; parents take their most urgent sub-agent's place.
@@ -102,6 +103,8 @@ export default class Agents extends View {
     this.folded = new Set();
     this.configuredMachines = [];
     if (props()?.tree && !checking()) {
+      this.refreshChildRows(cx);
+      this.childTimer = cx.timer.every(10000, cx => this.refreshChildRows(cx));
       this.refreshSidebarMachines(cx);
       this.machineTimer = cx.timer.every(15000, cx => this.refreshSidebarMachines(cx));
     }
@@ -140,6 +143,20 @@ export default class Agents extends View {
   focusSession(pane) {
     run('pane.focus', {pane});
     if (props()?.tree && needsSinglePane(panes(),pane)) run('pane.zoom',{pane});
+  }
+
+  refreshChildRows(cx) {
+    if (this.childBusy) return;
+    const pids = terminals().filter(t => !t.address.includes('/') && t.foreground?.name === 'codex').map(t => String(t.foreground.pid)).slice(0,16);
+    if (!pids.length) { this.childPackets = {}; return; }
+    this.childBusy = true;
+    cx.spawn(async cx => {
+      try {
+        const result = await exec('python3',[appHome()+'/mods/agents-order/codex-children.py',...pids],{timeout:8000});
+        this.childPackets = result.code === 0 ? JSON.parse(result.stdout) : {};
+      } catch { this.childPackets = {}; }
+      finally { this.childBusy = false; if (!this.closed) cx.notify(); }
+    });
   }
 
   refreshSidebarMachines(cx) {
@@ -649,6 +666,7 @@ export default class Agents extends View {
     this.spaceDrag = null;
     this.closed = true;
     this.machineTimer?.cancel();
+    this.childTimer?.cancel();
     this.renameFocusTimer?.cancel();
     this.tabEchoTimer?.cancel();
     this.dragTimer?.cancel();
@@ -775,10 +793,28 @@ export default class Agents extends View {
     setAgentOrder(list.map((a) => a.address));
     if (this.mode === "todo") return this.todoShell(t);
 
+    const virtual = new Map();
+    if (unified && !collapsed) for (const term of all) {
+      const pid = term.foreground?.pid;
+      let packet = term.address.includes('/') ? null : this.childPackets?.[pid];
+      const label = term.labels?.['workbench.children.v1'];
+      if (typeof label === 'string' && label.length <= 8192) {
+        try { packet = JSON.parse(label); } catch { packet = null; }
+      }
+      virtual.set(term.address,childRows(packet,pid));
+    }
+    const virtualRow = (kid, index, siblings) => {
+      const names = {working:'运行中',permission:'待授权',reply:'待回应',review:'待审核',idle:'空闲',blocked:'阻塞',unknown:'状态未知'};
+      return h_flex().relative().pl(38).pr(8).h(26).flex_none().gap(5).items_center().tooltip(names[kid.state])
+        .child(div().absolute().left(17).top(index === 0 ? -4 : 0).bottom(index === siblings.length - 1 ? 12 : 0).w(1).bg(t.border))
+        .child(div().absolute().left(17).top(13).w(14).h(1).bg(t.border))
+        .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child([kid.name,kid.model].filter(Boolean).join(' · ')))
+        .child(kid.state === 'unknown' ? div().text_color(t.dim).child('·') : kid.state === 'blocked' ? statusIcon('blocked',t) : hintView(t,{icon:kid.state},0,{},true));
+    };
     const withKids = (a, i, members) => {
       const subs = collapsed ? [] : this.tree(all, a.address);
       const r = row(a, i, subs, members);
-      const children = this.folded.has(a.address) ? [r] : [r, ...subs.map(s => this.subRow(t, s, shown))];
+      const children = this.folded.has(a.address) ? [r] : [r, ...subs.map(s => this.subRow(t, s, shown)), ...(virtual.get(a.address) ?? []).map(virtualRow)];
       return children;
     };
 
@@ -977,7 +1013,7 @@ export default class Agents extends View {
     const groupRows = g => {
       if (byPriority || g.id === "pinned") return g.members.flatMap((a, i) => withKids(a, i, g.members));
       const heights = Object.fromEntries(g.members.map(a => [
-        a.address, rowHeight(a) + (unified ? 4 : 0) + (this.folded.has(a.address) ? 0 : this.tree(all, a.address).length * 26),
+        a.address, rowHeight(a) + (unified ? 4 : 0) + (this.folded.has(a.address) ? 0 : (this.tree(all, a.address).length + (virtual.get(a.address)?.length ?? 0)) * 26),
       ]));
       const drag = this.drag?.space === g.members[0]?.space ? this.drag : null;
       const positions = projectedPositions(g.members, drag?.address, drag?.target, heights);
