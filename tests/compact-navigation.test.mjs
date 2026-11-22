@@ -41,3 +41,45 @@ test('未命名 shell 使用目录，同名补终端号，尊重手工标签和 
   ];
   assert.deepEqual([...terminalTitles(entries).values()], ['api · t3','api · t4','日志','编写测试','/']);
 });
+
+test('终端区顶部只有一个创建入口，空项目和切换项目后均使用当前 Space', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { register } = await import('node:module');
+  const layout = JSON.parse(await readFile(new URL('../layouts/agents-order.json', import.meta.url)));
+  const work = layout.children.find(node => node.id === 'work');
+  const bar = work.children[0].content;
+  assert.deepEqual(bar, {mod:'compact-tabs', props:{terminalOnly:true}});
+  const state = globalThis.terminalButtonFixture = {spaces:[], clicks:[], commands:[], props:bar.props};
+  const fixture = `
+    const state = globalThis.terminalButtonFixture;
+    export class View {}
+    function node() {
+      const element = new Proxy({}, {get: (_, key) => (...args) => {
+        if (key === 'on_click') state.clicks.push(args[0]);
+        return element;
+      }});
+      return element;
+    }
+    export const h_flex=node, v_flex=node, div=node, svg=node, image=node;
+    export const props=()=>state.props, spaces=()=>state.spaces, theme=()=>({});
+    export const run=(...args)=>state.commands.push(args);
+    export const panes=node, openOverlay=node, window=node, shared=node, layout=node,
+      settings=node, terminals=node, closeOverlay=node, setShared=node, Input=node, InputState=node, ScrollHandle=node;
+  `;
+  const url = 'data:text/javascript,' + encodeURIComponent(fixture);
+  register('data:text/javascript,' + encodeURIComponent(`
+    export function resolve(name, ctx, next) {
+      if (['herdr','gpui-base','gpui-kit'].includes(name)) return {url:${JSON.stringify(url)},shortCircuit:true};
+      return next(name, ctx);
+    }`));
+  const { default: Tabs } = await import('../mods/compact-tabs/main.js');
+  const widget = new Tabs();
+  widget.init();
+  state.spaces = [{id:'a', active:true, tabs:[]}];
+  widget.render();
+  assert.equal(state.clicks.length, 1);
+  state.clicks[0]();
+  state.spaces = [{id:'a'}, {id:'b', active:true, tabs:[]}];
+  state.clicks[0]();
+  assert.deepEqual(state.commands, [['tab.new',{space:'a'}], ['tab.new',{space:'b'}]]);
+});

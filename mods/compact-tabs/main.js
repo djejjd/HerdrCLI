@@ -30,6 +30,7 @@ function label(tab, lead) {
 
 export default class Tabs extends View {
   init() {
+    if (props()?.terminalOnly) return;
     this.history = new Map();
     this.stripWidth = 680;
     if (props()?.context) return;
@@ -180,6 +181,17 @@ export default class Tabs extends View {
 
   render() {
     const t = theme();
+    if (props()?.terminalOnly) {
+      const createTerminal = () => {
+        const active = spaces().find(space => space.active);
+        if (active) run("tab.new", { space: active.id });
+      };
+      return h_flex().size_full().px(8).items_center().bg(t.chrome)
+        .child(div().id("terminal-new").size(26).flex().items_center().justify_center()
+          .rounded(6).text_color(t.muted).cursor_pointer()
+          .hover(style => style.bg(t.hover).text_color(t.foreground))
+          .tooltip("在当前 Space 新建终端").on_click(createTerminal).child("+"));
+    }
     const space = spaces().find(p => p.active);
     if (props()?.context) return this.contextMenu(t, space);
     if (props()?.picker) return this.picker(t);

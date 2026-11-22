@@ -80,6 +80,12 @@
       "resizable": false,
       "children": [
         {
+          "id": "terminal-actions",
+          "type": "block",
+          "size": { "px": 28 },
+          "content": { "mod": "compact-tabs", "props": { "terminalOnly": true } }
+        },
+        {
           "id": "work-body",
           "type": "row",
           "padding": 8,
