@@ -1,4 +1,4 @@
-import { childRows } from './harness-kids.js';
+import { childRows, childReadTargets, updateChildPackets, childPacketFor } from './harness-kids.js';
 import { sidebarIndex, sidebarAgents, needsSinglePane } from "./unified-sidebar-index.js";
 import { sidebarRows } from "./tree-view.js";
 // Agents in grouped or priority views; parents take their most urgent sub-agent's place.
@@ -147,15 +147,22 @@ export default class Agents extends View {
 
   refreshChildRows(cx) {
     if (this.childBusy) return;
-    const pids = terminals().filter(t => !t.address.includes('/') && t.foreground?.name === 'codex').map(t => String(t.foreground.pid)).slice(0,16);
-    if (!pids.length) { this.childPackets = {}; return; }
+    const requested = childReadTargets(terminals());
+    if (!requested.length) { this.childPackets = new Map(); return; }
+    const pids = [...new Set(requested.map(term => String(term.foreground.pid)))];
     this.childBusy = true;
     cx.spawn(async cx => {
+      let result;
       try {
-        const result = await exec('python3',[appHome()+'/mods/agents-order/codex-children.py',...pids],{timeout:8000});
-        this.childPackets = result.code === 0 ? JSON.parse(result.stdout) : {};
-      } catch { this.childPackets = {}; }
-      finally { this.childBusy = false; if (!this.closed) cx.notify(); }
+        result = await exec('python3',[appHome()+'/mods/agents-order/codex-children.py',...pids],{timeout:8000});
+      } catch { /* 用固定阶段报告子进程失败。 */ }
+      finally {
+        this.childBusy = false;
+        if (!this.closed) {
+          this.childPackets = updateChildPackets(this.childPackets,requested,terminals(),result);
+          cx.notify();
+        }
+      }
     });
   }
 
@@ -208,7 +215,8 @@ export default class Agents extends View {
   hint(agent, compact = false) {
     const items = this.rowItems.byAddress.get(agent.address) ?? [];
     const hint = rowHint(agent, items);
-    const packet = this.childPackets?.[this.localAgentPids?.get(agent.address)];
+    const term = this.localAgentTerms?.get(agent.address);
+    const packet = term ? childPacketFor(term,this.childPackets,false) : null;
     if (hint.icon === 'idle' && (packet?.parentState === 'completed' || agent.status === 'completed')) hint.icon = 'completed';
     return hintView(theme(), hint, items.length,
       { id:agent.address, show:cx => this.showItems(agent.address, cx) }, compact);
@@ -796,20 +804,14 @@ export default class Agents extends View {
     setAgentOrder(list.map((a) => a.address));
     if (this.mode === "todo") return this.todoShell(t);
 
-    this.localAgentPids = new Map(all.filter(t => !t.address.includes('/') && t.foreground?.name === 'codex').map(t => [t.address,t.foreground.pid]));
+    this.localAgentTerms = new Map(all.map(t => [t.address,t]));
     const virtual = new Map();
     if (unified && !collapsed) for (const term of all) {
-      const pid = term.foreground?.pid;
-      let packet = term.address.includes('/') ? null : this.childPackets?.[pid];
-      const label = term.labels?.['workbench.children.v1'];
-      if (typeof label === 'string' && label.length <= 8192) {
-        try { packet = JSON.parse(label); } catch { packet = null; }
-      }
-      virtual.set(term.address,childRows(packet,pid));
+      virtual.set(term.address,childRows(childPacketFor(term,this.childPackets),term.foreground?.pid));
     }
     const virtualRow = (kid, index, siblings) => {
       const names = {working:'运行中',permission:'待授权',reply:'待回应',review:'待审核',idle:'空闲',blocked:'阻塞',unknown:'状态未知',completed:'本轮已完成'};
-      return h_flex().relative().pl(38).pr(8).h(26).flex_none().gap(5).items_center().tooltip(kid.state === 'unknown' ? '状态未知' : [kid.name,kid.model,kid.id,names[kid.state]].filter(Boolean).join(' · '))
+      return h_flex().relative().pl(38).pr(8).h(26).flex_none().gap(5).items_center().tooltip(kid.state === 'unknown' ? '状态未知' : [kid.name,kid.model,kid.id,names[kid.state],kid.reading].filter(Boolean).join(' · '))
         .child(div().absolute().left(17).top(index === 0 ? -4 : 0).bottom(index === siblings.length - 1 ? 12 : 0).w(1).bg(t.border))
         .child(div().absolute().left(17).top(13).w(14).h(1).bg(t.border))
         .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child([kid.name,kid.model].filter(Boolean).join(' · ')))
