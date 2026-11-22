@@ -2,7 +2,7 @@
 import { div, svg } from 'gpui-kit';
 import { h_flex, v_flex } from 'gpui-base';
 import { run, openOverlay, spaces as liveSpaces } from 'herdr';
-import { machineNames, machineAction, spaceMove } from './unified-sidebar-index.js';
+import { machineProjects, machineNames, machineAction, spaceMove } from './unified-sidebar-index.js';
 
 const keyOf = (type, id) => JSON.stringify([type,id]);
 const chevron = (open, t) => svg('mods/workspace-chrome/chevron-' + (open ? 'down' : 'right') + '.svg')
@@ -36,7 +36,7 @@ export function sidebarRows(t, spaces, machineList, tree, view, drawAgents) {
         .child(div().truncate().font_semibold().text_size(12)
         .text_color(t.muted).tooltip(s.name).child(s.name)))
       .when(!open && count > 0, el => el.child(countLabel(count,t)));
-    const group = v_flex().id('space-group-' + s.id).relative().pl(names.length ? 8 : 0).mt(6).flex_none()
+    const group = v_flex().id('space-group-' + s.id).relative().mt(6).flex_none()
       .on_mouse_move((e,cx) => {
         const d = view.spaceDrag;
         if (!d) return;
@@ -63,36 +63,41 @@ export function sidebarRows(t, spaces, machineList, tree, view, drawAgents) {
       .child(header)
       .when(open && s.active && s.branch, el => el.child(div().pl(51).pb(2).text_size(11.5).text_color(t.dim)
         .child(s.branch.replace(/([/-])/g,'$1\u200b'))))
-      .when(open && members.length, el => el.child(v_flex().pl(24).children(drawAgents(members))))
+      .when(open && members.length, el => el.child(v_flex().relative().pl(24)
+        .child(div().absolute().left(16).top(4).bottom(16).w(1).bg(t.border))
+        .children(drawAgents(members))))
       .when(mark, el => el.child(div().absolute().left(1).right(1).h(2).bg(t.accent)
         .when(drag.after, line => line.bottom(0)).when(!drag.after,line => line.top(0))));
     rows.push(group);
   };
-  if (!names.length) { spaces.forEach(addSpace); return rows; }
-  for (const name of names) {
-    const key = keyOf('machine',name), open = !view.folds.has(key);
-    const action = machineAction(name, machineList);
-    const count = tree.pending.get(name) ?? 0;
-    rows.push(row().id(key).rounded(5).cursor_pointer().hover(el => el.bg(t.hover))
-      .on_click((_e,cx) => view.toggle(key,cx))
-      .child(lead().child(chevron(open,t)))
-      .child(div().flex_1().min_w(0).truncate().text_size(12).font_semibold().text_color(t.foreground).child(name ?? '本机'))
-      .when(!open && count > 0, el => el.child(countLabel(count,t)))
-      .child(div().id('action-' + key).px(5).text_color(t.muted)
-        .tooltip(action === '+' ? '新建工作区' : '打开机器连接设置')
-        .on_click((_e,cx) => {
-          cx.stop_propagation();
-          if (action === '+') run('space.new',{machine:name ?? ''});
-          else run('app.settings',{section:'machines'});
-        }).child(action)));
-    if (!open) continue;
-    const projects = spaces.filter(s => (s.machine ?? null) === name);
-    projects.forEach(addSpace);
-    if (!projects.length) {
-      const state = machineList.find(m => m.name === name)?.layout;
-      rows.push(div().pl(32).text_size(11.5).text_color(t.dim)
-        .child(state === 'loading' ? '载入中…' : (state === 'unavailable' || (name && machineList.some(m => m.name === name && m.state && m.state !== 'connected'))) ? '机器未连接' : '暂无工作区'));
-    }
+  const active = spaces.find(space => space.active)?.machine ?? null;
+  const name = view.selectedMachine === undefined ? active : view.selectedMachine;
+  const action = machineAction(name,machineList);
+  const options = names.length ? names : [null];
+  rows.push(row().id('machine-picker').child(div().flex_1().truncate().font_semibold()
+    .when(options.length > 1, el => el.cursor_pointer().on_click((_e,cx) => {
+      view.machineMenu = !view.machineMenu;
+      cx.notify();
+    })).child((name ?? '本机') + (options.length > 1 ? ' ▾' : '')))
+    .child(div().id('machine-action').px(6).cursor_pointer().tooltip(action === '+' ? '新建工作区' : '机器设置')
+      .on_click(() => action === '+' ? run('space.new',{machine:name ?? ''}) : run('app.settings',{section:'machines'})).child(action)));
+  if (view.machineMenu) {
+    for (const option of options) rows.push(row().id(keyOf('machine',option)).cursor_pointer()
+      .on_click((_e,cx) => {
+        view.selectedMachine = option;
+        view.machineMenu = false;
+        const targets = machineProjects(spaces,option);
+        const target = targets.find(space => space.id === view.lastProjects?.get(option)) ?? targets[0];
+        view.lastProjects ??= new Map();
+        const previous = spaces.find(space => space.active);
+        if (previous) view.lastProjects.set(previous.machine ?? null,previous.id);
+        run(target ? 'layout.show' : 'layout.hide',{id:'work'});
+        if (target) run('space.select',{id:target.id});
+        cx.notify();
+      }).child(option ?? '本机'));
   }
+  const projects = machineProjects(spaces,name);
+  projects.forEach(addSpace);
+  if (!projects.length) rows.push(div().px(8).text_color(t.dim).child(action === '+' ? '暂无工作区' : '机器未连接'));
   return rows;
 }

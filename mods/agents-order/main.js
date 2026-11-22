@@ -1,4 +1,5 @@
-import { sidebarIndex, sidebarAgents } from "./unified-sidebar-index.js";
+import { childRows, childReadTargets, updateChildPackets, childPacketFor } from './harness-kids.js';
+import { sidebarIndex, sidebarAgents, needsSinglePane } from "./unified-sidebar-index.js";
 import { sidebarRows } from "./tree-view.js";
 // Agents in grouped or priority views; parents take their most urgent sub-agent's place.
 
@@ -102,6 +103,8 @@ export default class Agents extends View {
     this.folded = new Set();
     this.configuredMachines = [];
     if (props()?.tree && !checking()) {
+      this.refreshChildRows(cx);
+      this.childTimer = cx.timer.every(10000, cx => this.refreshChildRows(cx));
       this.refreshSidebarMachines(cx);
       this.machineTimer = cx.timer.every(15000, cx => this.refreshSidebarMachines(cx));
     }
@@ -135,6 +138,32 @@ export default class Agents extends View {
       this.todoTimer = cx.timer.every(2000, (cx) => this.refreshTodo(cx));
       this.refreshTodo(cx);
     }
+  }
+
+  focusSession(pane) {
+    run('pane.focus', {pane});
+    if (props()?.tree && needsSinglePane(panes(),pane)) run('pane.zoom',{pane});
+  }
+
+  refreshChildRows(cx) {
+    if (this.childBusy) return;
+    const requested = childReadTargets(terminals());
+    if (!requested.length) { this.childPackets = new Map(); return; }
+    const pids = [...new Set(requested.map(term => String(term.foreground.pid)))];
+    this.childBusy = true;
+    cx.spawn(async cx => {
+      let result;
+      try {
+        result = await exec('python3',[appHome()+'/mods/agents-order/codex-children.py',...pids],{timeout:8000});
+      } catch { /* 用固定阶段报告子进程失败。 */ }
+      finally {
+        this.childBusy = false;
+        if (!this.closed) {
+          this.childPackets = updateChildPackets(this.childPackets,requested,terminals(),result);
+          cx.notify();
+        }
+      }
+    });
   }
 
   refreshSidebarMachines(cx) {
@@ -185,7 +214,11 @@ export default class Agents extends View {
 
   hint(agent, compact = false) {
     const items = this.rowItems.byAddress.get(agent.address) ?? [];
-    return hintView(theme(), rowHint(agent, items), items.length,
+    const hint = rowHint(agent, items);
+    const term = this.localAgentTerms?.get(agent.address);
+    const packet = term ? childPacketFor(term,this.childPackets,false) : null;
+    if (hint.icon === 'idle' && (packet?.parentState === 'completed' || agent.status === 'completed')) hint.icon = 'completed';
+    return hintView(theme(), hint, items.length,
       { id:agent.address, show:cx => this.showItems(agent.address, cx) }, compact);
   }
 
@@ -609,7 +642,7 @@ export default class Agents extends View {
       return live?.space === d.space && !live.pinned;
     });
     const outcome = dragDecision({ dy: d.y - d.start, origin: d.origin, target: d.target, valid: d.valid });
-    if (outcome === "focus") { if (d.valid) run("pane.focus", { pane: d.pane }); return; }
+    if (outcome === "focus") { if (d.valid) this.focusSession(d.pane); return; }
     if (outcome !== "reorder") return;
     const ids = reorderGroup(d.members, d.address, d.target);
     if (ids) this.saveDrag(d.space, ids, cx);
@@ -644,6 +677,7 @@ export default class Agents extends View {
     this.spaceDrag = null;
     this.closed = true;
     this.machineTimer?.cancel();
+    this.childTimer?.cancel();
     this.renameFocusTimer?.cancel();
     this.tabEchoTimer?.cancel();
     this.dragTimer?.cancel();
@@ -740,7 +774,7 @@ export default class Agents extends View {
     const collapsed = narrow();
     const sort = sortOf();
     const all = terminals();
-    let list = sidebarAgents(agents(), all, panes(), spaces());
+    let list = sidebarAgents(agents(), all, panes(), spaces(), Boolean(props()?.tree));
     this.listed = new Map(list.map((a) => [a.address, a.status]));
     this.nameById = new Map(all.map(t => [t.address, displayName(t.labels ?? {}, "")]));
     if (!checking()) this.scanAutoNames(all, cx);
@@ -770,11 +804,24 @@ export default class Agents extends View {
     setAgentOrder(list.map((a) => a.address));
     if (this.mode === "todo") return this.todoShell(t);
 
+    this.localAgentTerms = new Map(all.map(t => [t.address,t]));
+    const virtual = new Map();
+    if (unified && !collapsed) for (const term of all) {
+      virtual.set(term.address,childRows(childPacketFor(term,this.childPackets),term.foreground?.pid));
+    }
+    const virtualRow = (kid, index, siblings) => {
+      const names = {working:'运行中',permission:'待授权',reply:'待回应',review:'待审核',idle:'空闲',blocked:'阻塞',unknown:'状态未知',completed:'本轮已完成'};
+      return h_flex().relative().pl(38).pr(8).h(26).flex_none().gap(5).items_center().tooltip(kid.state === 'unknown' ? '状态未知' : [kid.name,kid.model,kid.id,names[kid.state],kid.reading].filter(Boolean).join(' · '))
+        .child(div().absolute().left(17).top(index === 0 ? -4 : 0).bottom(index === siblings.length - 1 ? 12 : 0).w(1).bg(t.border))
+        .child(div().absolute().left(17).top(13).w(14).h(1).bg(t.border))
+        .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child([kid.name,kid.model].filter(Boolean).join(' · ')))
+        .child(['unknown','blocked'].includes(kid.state) ? h_flex().size(20).items_center().justify_center().child(kid.state === 'unknown' ? div().w(8).h(1).bg(t.muted) : statusIcon('blocked',t)) : hintView(t,{icon:kid.state},0,{},true));
+    };
     const withKids = (a, i, members) => {
       const subs = collapsed ? [] : this.tree(all, a.address);
       const r = row(a, i, subs, members);
-      if (this.folded.has(a.address)) return [r];
-      return [r, ...subs.map((s) => this.subRow(t, s, shown))];
+      const children = this.folded.has(a.address) ? [r] : [r, ...subs.map(s => this.subRow(t, s, shown)), ...(virtual.get(a.address) ?? []).map(virtualRow)];
+      return children;
     };
 
     // The fold chevron; folded, the count too, colored by the most urgent one.
@@ -822,8 +869,9 @@ export default class Agents extends View {
       if (detail.get(a.address) == null && seen[`${a.space_name}\u0000`] > 1) detail.set(a.address, label(a));
     }
 
+
     const row = (a, i, subs = [], members = []) => {
-      const pic = icon(a.program, 16, t.foreground);
+      const pic = icon(a.program, 16, a.program?.key === "shell" ? t.muted : t.foreground);
       const more = detail.get(a.address);
       // An agent on another machine (`vps/t7`) says which.
       const machine = a.address.includes("/") ? a.address.split("/")[0] : null;
@@ -836,7 +884,7 @@ export default class Agents extends View {
           .items_center()
           .gap(4)
           .hover((s) => s.bg(t.hover))
-          .on_click(() => run("pane.focus", { pane: a.pane }))
+          .on_click(() => this.focusSession(a.pane))
           .child(div().flex_1().min_w(0).whitespace_nowrap().text_right().text_color(t.muted).child(String(i + 1)))
           .child(h_flex().w(14).flex_none().items_center().justify_center().child(this.hint(a, true)));
       }
@@ -867,10 +915,15 @@ export default class Agents extends View {
       const storedName = this.nameById?.get(a.address) || "";
       const fallbackName = full ? a.space_name || label(a) : more ?? (/^\d+$/.test(label(a)) ? a.program?.name || label(a) : label(a));
       const name = storedName || fallbackName;
+      const singleName = storedName || (more && more !== a.address ? more : '') || a.program?.name || name;
       return h_flex()
         .id(`ag-${a.address}`)
         .px(8)
         .h(30)
+        .when(unified, el => el.mb(4))
+        .relative()
+        .when(unified, el => el.child(div().absolute().left(-8).top(15)
+          .w(8).h(1).bg(t.border)))
         .flex_none()
         .rounded(8)
         .items_center()
@@ -887,7 +940,7 @@ export default class Agents extends View {
         .when(this.drag?.address === a.address, el => el.opacity(0.35))
         .when(this.drag?.space === a.space && this.drag?.target === i && this.drag?.address !== a.address && !isPinned,
           el => el.border_1().border_color(t.accent))
-        .on_click(() => { if (Date.now() - (this.lastDragEnd ?? 0) > 300) run("pane.focus", { pane: a.pane }); })
+        .on_click(() => { if (Date.now() - (this.lastDragEnd ?? 0) > 300) this.focusSession(a.pane); })
         .when(unified, el => el.child(h_flex().id("handle-" + a.address).w(17).h_full().flex_none().items_center().justify_center()
           .when(!isPinned && members.length > 1, slot => slot.cursor_grab().tooltip("按住拖动排序")
             .on_hover((over,cx) => {
@@ -909,15 +962,17 @@ export default class Agents extends View {
             this.folded.has(a.address) ? this.folded.delete(a.address) : this.folded.add(a.address);
             cx.notify();
           })).child(pic)))
-        .child(h_flex().flex_1().min_w(0).gap(5).items_center()
+        .when(unified, el => el.child(div().flex_1().min_w(0).truncate().font_semibold()
+          .tooltip([singleName, a.program?.name, a.address].filter(Boolean).join(' · ')).child(singleName)))
+        .when(!unified, el => el.child(h_flex().flex_1().min_w(0).gap(5).items_center()
           .child(div().min_w(0).when(!unified, el => el.max_w(full && more ? 120 : 200)).truncate().tooltip(name).text_color(idle ? t.muted : t.foreground).child(name))
-          .when(full && Boolean(more), el => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(`\u00b7 ${more}`))))
+          .when(full && Boolean(more), el => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(`\u00b7 ${more}`)))))
         .when(!unified && Boolean(machine), el => el.child(div().text_size(10).text_color(t.dim).child(machine)))
         .when(subs.length > 0, el => el.child(fold(a, subs)))
         .when(!unified && this.hovered === a.address, el => el.child(this.renameButton(a.address, t)))
         .when(!unified && this.hovered === a.address, el => el.child(pin))
-        .when(!attention && (unified || this.hovered !== a.address) && Boolean(when), el => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - when))))
-        .child(this.hint(a));
+        .when(!unified && !attention && (this.hovered !== a.address) && Boolean(when), el => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - when))))
+        .when(!unified || a.program?.agent !== false, el => el.child(this.hint(a)));
     };
 
     // Groups in list order: spaces (grouped) or priority sections. Agents of a
@@ -960,7 +1015,7 @@ export default class Agents extends View {
     const groupRows = g => {
       if (byPriority || g.id === "pinned") return g.members.flatMap((a, i) => withKids(a, i, g.members));
       const heights = Object.fromEntries(g.members.map(a => [
-        a.address, 30 + (this.folded.has(a.address) ? 0 : this.tree(all, a.address).length * 26),
+        a.address, 30 + (unified ? 4 : 0) + (this.folded.has(a.address) ? 0 : (this.tree(all, a.address).length + (virtual.get(a.address)?.length ?? 0)) * 26),
       ]));
       const drag = this.drag?.space === g.members[0]?.space ? this.drag : null;
       const positions = projectedPositions(g.members, drag?.address, drag?.target, heights);
@@ -973,10 +1028,12 @@ export default class Agents extends View {
     };
     const projects = spaces();
     const tree = unified ? sidebarIndex(projects,list,this.rowItems.byAddress,a => this.tree(all,a.address).map(k => k.t)) : null;
-    const projectAgents = members => [
+    const projectAgents = members => {
+      return [
       ...members.filter(a => a.pinned).flatMap((a,i) => withKids(a,i,[])),
       ...groupRows({ id:"project", members:members.filter(a => !a.pinned) }),
-    ];
+      ];
+    };
     const rows = unified && !collapsed ? sidebarRows(t,projects,[...machines(),...this.configuredMachines],tree,this,projectAgents) : collapsed
       ? list.flatMap(withKids)
       : groups.flatMap((g) => [header(g), ...(this.folded.has(g.id) ? [] : groupRows(g))]);
@@ -1005,11 +1062,11 @@ export default class Agents extends View {
       )
       .when(this.error, el => el.child(div().px(12).py(4).text_size(11).text_color(t.blocked).child(this.error)))
       .child(v_flex().id("ag-list").flex_1().min_h(0).px(collapsed ? 0 : 8).overflow_y_scrollbar().mode("always").children(rows))
-      .when(!collapsed && (this.rowItems.unlinked.length || this.todoState.errors?.length ||
+      .when(!collapsed && (this.todoState.errors?.length ||
           ["error","stale","missing"].includes(this.todoState.kind)), el => el.child(
         div().id("unlinked-items").px(16).py(4).text_size(12).text_color(t.muted).cursor_pointer()
           .on_click((_e,cx) => this.showItems(null,cx))
-          .child(this.rowItems.unlinked.length ? "未关联事项 " + this.rowItems.unlinked.length : "事项读取异常")))
+          .child("事项读取异常")))
       .when(collapsed, (el) =>
         el.child(
           h_flex()

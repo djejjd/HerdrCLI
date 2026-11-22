@@ -36,7 +36,7 @@
           "window_drag": true,
           "content": {
             "mod": "workspace-chrome",
-            "props": { "workspaceActions": true }
+            "props": {}
           }
         },
         {
@@ -80,17 +80,6 @@
       "resizable": false,
       "children": [
         {
-          "id": "tabs",
-          "type": "block",
-          "size": {
-            "px": 42
-          },
-          "window_drag": true,
-          "content": {
-            "mod": "compact-tabs"
-          }
-        },
-        {
           "id": "work-body",
           "type": "row",
           "padding": 8,
@@ -113,14 +102,6 @@
                   "focus": {
                     "width": 1,
                     "color": "accent"
-                  },
-                  "header": {
-                    "content": {
-                      "mod": "pane"
-                    },
-                    "height": 30,
-                    "position": "top",
-                    "reveal": "always"
                   }
                 }
               }
@@ -167,7 +148,7 @@
             "px": 28
           },
           "content": {
-            "mod": "magpie-status"
+            "mod": "session-footer"
           }
         }
       ]

@@ -56,3 +56,31 @@ test('机器行按连接状态显示创建、登录或重连入口', async () =>
   assert.equal(machineAction('dev', [{name:'dev',layout:'ready'}, {name:'dev',state:'needs_login'}]), '需登录');
   assert.equal(machineAction('dev', [{name:'dev',layout:'unavailable'}]), '重连');
 });
+
+test('统一项目树包含同一分屏里的 Shell 和 Agent，每个终端只列一次', async () => {
+  const { sidebarAgents } = await import('../mods/agents-order/unified-sidebar-index.js');
+  const agent = {address:'t1', space:'s', pane:'p1'};
+  const terminals = ['t1','t2'].map(address => ({address,state:'live',foreground:{name:'zsh'}}));
+  const panes = terminals.map((t,i) => ({terminal:t.address,pane:`p${i+1}`,tab:'tab'}));
+  const spaces = [{id:'s',tabs:[{id:'tab',name:'构建'}]}];
+  const rows = sidebarAgents([agent], terminals, panes, spaces, true);
+  assert.deepEqual(rows.map(r => [r.address,r.pane]), [['t1','p1'],['t2','p2']]);
+  assert.equal(rows[1].program.name,'Shell');
+});
+
+test('只展示所选机器项目，未连接的机器可为空', async () => {
+  const { machineProjects } = await import('../mods/agents-order/unified-sidebar-index.js');
+  const projects = [{id:'a'}, {id:'b',machine:'dev'}];
+  assert.deepEqual(machineProjects(projects,null), [projects[0]]);
+  assert.deepEqual(machineProjects(projects,'dev'), [projects[1]]);
+  assert.deepEqual(machineProjects(projects,'offline'), []);
+});
+
+test('切换到分屏只放大一次，单窗和重复选择保持焦点', async () => {
+  const { needsSinglePane } = await import('../mods/agents-order/unified-sidebar-index.js');
+  const pane = {pane:'p1',tab:'t',zoomed:false};
+  assert.equal(needsSinglePane([pane], 'p1'),false);
+  const split = [pane,{pane:'p2',tab:'t',zoomed:true}];
+  assert.equal(needsSinglePane(split,'p1'),true);
+  assert.equal(needsSinglePane(split,'p2'),false);
+});
