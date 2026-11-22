@@ -22,10 +22,10 @@
       "size": {
         "px": 268
       },
-      "min": 44,
+      "min": 240,
       "max": 480,
       "background": "chrome",
-      "resizable": false,
+      "resizable": true,
       "children": [
         {
           "id": "brand",
@@ -36,7 +36,9 @@
           "window_drag": true,
           "content": {
             "mod": "workspace-chrome",
-            "props": {}
+            "props": {
+              "widthPolicy": true
+            }
           }
         },
         {

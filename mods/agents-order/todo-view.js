@@ -1,3 +1,4 @@
+import {statusText} from './sidebar-policy.js';
 // 待办视图：标题分段、行、空/错误/冲突态。只消费 todo.js 的视图模型。
 import { div, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
@@ -38,11 +39,11 @@ export function hintView(t, hint, count, open, compact = false) {
   const path = hint.icon === "completed" ? "mods/agents-order/completed.svg" : busy ? "mods/workspace-chrome/spinner.svg" : "mods/agents-order/" + paths[hint.icon] + ".svg";
   const icon = svg(path).size(hint.icon === "idle" ? 14 : 13).flex_none().text_color(hint.icon === "completed" ? completedTone(t) : hint.icon === "permission" ? t.working : t.muted);
   return h_flex().gap(3).flex_none().items_center()
-    .when(!compact && count > 1, el => el.id("items-" + open.id).cursor_pointer().tooltip("查看这 " + count + " 项")
+    .when(!compact && count > 1, el => el.id("items-" + open.id).cursor_pointer().tooltip(statusText(hint.icon))
       .on_click((_e,cx) => { cx.stop_propagation(); open.show(cx); }))
 
     .when(!compact && Boolean(hint.text), el => el.child(div().text_size(12).text_color(t.muted).child(hint.text)))
-    .child(h_flex().size(20).flex_none().items_center().justify_center()
+    .child(h_flex().size(20).flex_none().items_center().justify_center().tooltip(statusText(hint.icon))
       .child(busy ? squareActivity(t) : hint.icon === "completed" ? icon.tooltip("本轮已完成") : icon));
 }
 

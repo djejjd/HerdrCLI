@@ -86,6 +86,7 @@ export function childRows(packet,pid) {
     seen.add(id);
     const row = {id,name,model:clean(item.model),state:!reading && states.has(item.state) ? item.state : 'unknown'};
     if (reading) row.reading = reading;
+    if (Number.isSafeInteger(item.revision)) row.revision = item.revision;
     rows.push(row);
   }
   if (reading && !rows.length) rows.push({id:null,name:reading,model:'',state:'unknown'});

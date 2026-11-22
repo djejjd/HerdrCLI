@@ -13,7 +13,7 @@ ROOT = Path.home() / '.codex'
 
 def state_of(path, edge):
     if not isinstance(path, str) or not path:
-        return 'unknown'
+        return 'unknown', None
     try:
         with open(path, 'rb') as stream:
             stream.seek(0, 2)
@@ -28,17 +28,22 @@ def state_of(path, edge):
                 continue
             payload = event.get('payload')
             if not isinstance(payload, dict) or not isinstance(payload.get('type'), str):
-                return 'unknown'
+                return 'unknown', None
             kind = payload['type']
             if kind == 'task_complete':
-                return 'completed'
+                turn = payload.get('turn_id')
+                # 回执绑定真实完成轮次，即使 SQLite 更新时间未变化或尚未落库。
+                revision = None
+                if isinstance(turn, str) and turn and not payload.get('error'):
+                    revision = int(hashlib.sha256(turn.encode()).hexdigest()[:13], 16) or 1
+                return 'completed', revision
             if kind == 'turn_aborted':
-                return 'idle'
+                return 'idle', None
             if kind == 'task_started':
-                return 'idle' if edge == 'closed' else 'working'
+                return ('idle' if edge == 'closed' else 'working'), None
     except (OSError, ValueError):
         pass
-    return 'unknown'
+    return 'unknown', None
 
 
 def snapshot(pid):
@@ -58,10 +63,14 @@ def snapshot(pid):
             identity = {'identity':hashlib.sha256(f'{pid}:{start}:{parent_id}'.encode()).hexdigest()[:32]}
             stage = 'children'
             rows = db.execute('SELECT t.id,t.agent_path,t.model,t.rollout_path,e.status FROM st.thread_spawn_edges e JOIN st.threads t ON t.id=e.child_thread_id WHERE e.parent_thread_id=? ORDER BY t.created_at DESC LIMIT 16',(parent_id,)).fetchall()
-            children = [dict(id=i,name=(name if isinstance(name,str) and name else 'Agent').split('/')[-1],
-                             model=model if isinstance(model,str) else '',state=state_of(path,edge))
-                        for i,name,model,path,edge in rows if isinstance(i,str)]
-            return {'stage':'ready',**identity,'parentState':state_of(parent_path,'open'),'children':children}
+            children = []
+            for child_id,name,model,path,edge in rows:
+                if not isinstance(child_id,str):
+                    continue
+                state, revision = state_of(path,edge)
+                children.append(dict(id=child_id,name=(name if isinstance(name,str) and name else 'Agent').split('/')[-1],
+                                     model=model if isinstance(model,str) else '',state=state,revision=revision))
+            return {'stage':'ready',**identity,'parentState':state_of(parent_path,'open')[0],'children':children}
     except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError):
         return {'stage':stage,**identity,'children':[]}
 
