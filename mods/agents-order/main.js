@@ -809,11 +809,11 @@ export default class Agents extends View {
     }
     const virtualRow = (kid, index, siblings) => {
       const names = {working:'运行中',permission:'待授权',reply:'待回应',review:'待审核',idle:'空闲',blocked:'阻塞',unknown:'状态未知',completed:'本轮已完成'};
-      return h_flex().relative().pl(38).pr(8).h(26).flex_none().gap(5).items_center().tooltip([kid.name,kid.model,kid.id,names[kid.state]].filter(Boolean).join(' · '))
+      return h_flex().relative().pl(38).pr(8).h(26).flex_none().gap(5).items_center().tooltip(kid.state === 'unknown' ? '状态未知' : [kid.name,kid.model,kid.id,names[kid.state]].filter(Boolean).join(' · '))
         .child(div().absolute().left(17).top(index === 0 ? -4 : 0).bottom(index === siblings.length - 1 ? 12 : 0).w(1).bg(t.border))
         .child(div().absolute().left(17).top(13).w(14).h(1).bg(t.border))
         .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child([kid.name,kid.model].filter(Boolean).join(' · ')))
-        .child(['unknown','blocked'].includes(kid.state) ? h_flex().size(20).items_center().justify_center().child(kid.state === 'unknown' ? div().text_color(t.dim).child('·') : statusIcon('blocked',t)) : hintView(t,{icon:kid.state},0,{},true));
+        .child(['unknown','blocked'].includes(kid.state) ? h_flex().size(20).items_center().justify_center().child(kid.state === 'unknown' ? div().w(8).h(1).bg(t.muted) : statusIcon('blocked',t)) : hintView(t,{icon:kid.state},0,{},true));
     };
     const withKids = (a, i, members) => {
       const subs = collapsed ? [] : this.tree(all, a.address);
