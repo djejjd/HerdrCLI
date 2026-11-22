@@ -35,10 +35,10 @@ export function spaceMove(spaces, sourceId, targetId, after) {
 }
 
 // 补入未上报状态、但前台进程确认为 OpenCode 的可见终端。
-export function sidebarAgents(reported, terminals, panes, spaces) {
+export function sidebarAgents(reported, terminals, panes, spaces, includeShell = false) {
   const seen = new Set(reported.map(agent => agent.address));
   const candidates = terminals.filter(term => term.state === 'live' && !seen.has(term.address)
-    && /^opencode(?:\.exe)?$/i.test(term.foreground?.name ?? ''));
+    && (includeShell || /^opencode(?:\.exe)?$/i.test(term.foreground?.name ?? '')));
   if (!candidates.length) return reported;
   const rows = [...reported];
   for (const term of candidates) {
@@ -50,7 +50,7 @@ export function sidebarAgents(reported, terminals, panes, spaces) {
     rows.push({address:term.address, pane:pane.pane, tab:pane.tab, space:space.id,
       space_name:space.name, tab_index:index, tab_name:space.tabs[index].name,
       status:'unknown', title:pane.title ?? '', focused:pane.focused, pinned:!!term.pinned,
-      seq:0, program:{key:'opencode',name:'OpenCode',icon:'icons/opencode.svg',tint:true,agent:true}});
+      seq:0, program:!/^opencode(?:\.exe)?$/i.test(term.foreground?.name ?? '') ? {key:'shell',name:'Shell',agent:false} : {key:'opencode',name:'OpenCode',icon:'icons/opencode.svg',tint:true,agent:true}});
   }
   return rows;
 }
@@ -61,4 +61,15 @@ export function machineAction(name, machines) {
   if (state === 'needs_login') return '需登录';
   const ready = machines.some(machine => machine.name === name && machine.layout === 'ready');
   return (state ? state === 'connected' : ready) ? '+' : '重连';
+}
+
+// 项目在当前机器下直接成为树的第一层。
+export function machineProjects(spaces, machine) {
+  return spaces.filter(space => (space.machine ?? null) === machine);
+}
+
+// 仅在目标所在标签存在多个窗格时放大，避免重复点击解除放大。
+export function needsSinglePane(snapshot, id) {
+  const target = snapshot.find(pane => pane.pane === id);
+  return Boolean(target && !target.zoomed && snapshot.some(pane => pane.tab === target.tab && pane.pane !== id));
 }
