@@ -50,7 +50,7 @@ export function sidebarAgents(reported, terminals, panes, spaces, includeShell =
     rows.push({address:term.address, pane:pane.pane, tab:pane.tab, space:space.id,
       space_name:space.name, tab_index:index, tab_name:space.tabs[index].name,
       status:'unknown', title:pane.title ?? '', focused:pane.focused, pinned:!!term.pinned,
-      seq:0, program:!/^opencode(?:\.exe)?$/i.test(term.foreground?.name ?? '') ? {key:'shell',name:'Shell',agent:false} : {key:'opencode',name:'OpenCode',icon:'icons/opencode.svg',tint:true,agent:true}});
+      seq:0, program:!/^opencode(?:\.exe)?$/i.test(term.foreground?.name ?? '') ? {key:'shell',name:'Shell',icon:'mods/workspace-chrome/terminal.svg',tint:true,agent:false} : {key:'opencode',name:'OpenCode',icon:'icons/opencode.svg',tint:true,agent:true}});
   }
   return rows;
 }

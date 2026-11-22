@@ -207,7 +207,10 @@ export default class Agents extends View {
 
   hint(agent, compact = false) {
     const items = this.rowItems.byAddress.get(agent.address) ?? [];
-    return hintView(theme(), rowHint(agent, items), items.length,
+    const hint = rowHint(agent, items);
+    const packet = this.childPackets?.[this.localAgentPids?.get(agent.address)];
+    if (hint.icon === 'idle' && (packet?.parentState === 'completed' || agent.status === 'completed')) hint.icon = 'completed';
+    return hintView(theme(), hint, items.length,
       { id:agent.address, show:cx => this.showItems(agent.address, cx) }, compact);
   }
 
@@ -793,6 +796,7 @@ export default class Agents extends View {
     setAgentOrder(list.map((a) => a.address));
     if (this.mode === "todo") return this.todoShell(t);
 
+    this.localAgentPids = new Map(all.filter(t => !t.address.includes('/') && t.foreground?.name === 'codex').map(t => [t.address,t.foreground.pid]));
     const virtual = new Map();
     if (unified && !collapsed) for (const term of all) {
       const pid = term.foreground?.pid;
@@ -804,7 +808,7 @@ export default class Agents extends View {
       virtual.set(term.address,childRows(packet,pid));
     }
     const virtualRow = (kid, index, siblings) => {
-      const names = {working:'运行中',permission:'待授权',reply:'待回应',review:'待审核',idle:'空闲',blocked:'阻塞',unknown:'状态未知'};
+      const names = {working:'运行中',permission:'待授权',reply:'待回应',review:'待审核',idle:'空闲',blocked:'阻塞',unknown:'状态未知',completed:'本轮已完成'};
       return h_flex().relative().pl(38).pr(8).h(26).flex_none().gap(5).items_center().tooltip(names[kid.state])
         .child(div().absolute().left(17).top(index === 0 ? -4 : 0).bottom(index === siblings.length - 1 ? 12 : 0).w(1).bg(t.border))
         .child(div().absolute().left(17).top(13).w(14).h(1).bg(t.border))
@@ -867,7 +871,7 @@ export default class Agents extends View {
     const hasTask = a => Boolean(taskName(a) && taskName(a) !== a.program?.name);
     const rowHeight = a => unified && hasTask(a) ? 43 : 30;
     const row = (a, i, subs = [], members = []) => {
-      const pic = icon(a.program, 16, t.foreground);
+      const pic = icon(a.program, 16, a.program?.key === "shell" ? t.muted : t.foreground);
       const more = detail.get(a.address);
       // An agent on another machine (`vps/t7`) says which.
       const machine = a.address.includes("/") ? a.address.split("/")[0] : null;
@@ -959,8 +963,7 @@ export default class Agents extends View {
           })).child(pic)))
         .when(unified, el => el.child(v_flex().flex_1().min_w(0)
           .child(h_flex().min_w(0).gap(5).items_center()
-            .child(div().truncate().font_semibold().child(a.program?.name || name))
-            .when(a.program?.agent !== false, line => line.child(this.hint(a))))
+            .child(div().truncate().font_semibold().child(a.program?.name || name)))
           .when(hasTask(a), line => line.child(div().truncate().tooltip(taskName(a)).text_size(11.5).text_color(t.muted).child(taskName(a))))))
         .when(!unified, el => el.child(h_flex().flex_1().min_w(0).gap(5).items_center()
           .child(div().min_w(0).when(!unified, el => el.max_w(full && more ? 120 : 200)).truncate().tooltip(name).text_color(idle ? t.muted : t.foreground).child(name))
@@ -970,7 +973,7 @@ export default class Agents extends View {
         .when(!unified && this.hovered === a.address, el => el.child(this.renameButton(a.address, t)))
         .when(!unified && this.hovered === a.address, el => el.child(pin))
         .when(!unified && !attention && (this.hovered !== a.address) && Boolean(when), el => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - when))))
-        .when(!unified, el => el.child(this.hint(a)));
+        .when(!unified || a.program?.agent !== false, el => el.child(this.hint(a)));
     };
 
     // Groups in list order: spaces (grouped) or priority sections. Agents of a

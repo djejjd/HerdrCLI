@@ -10,8 +10,6 @@ ROOT = Path.home() / '.codex'
 
 
 def state_of(path, edge):
-    if edge == 'closed':
-        return 'idle'
     try:
         with open(path, 'rb') as stream:
             stream.seek(0, 2)
@@ -25,10 +23,12 @@ def state_of(path, edge):
             if event.get('type') != 'event_msg':
                 continue
             kind = event['payload'].get('type')
-            if kind in ('task_complete','turn_aborted'):
+            if kind == 'task_complete':
+                return 'completed'
+            if kind == 'turn_aborted':
                 return 'idle'
             if kind == 'task_started':
-                return 'working'
+                return 'idle' if edge == 'closed' else 'working'
     except OSError:
         pass
     return 'unknown'
@@ -42,12 +42,12 @@ def snapshot(pid):
         stage = 'identity'
         with sqlite3.connect((ROOT/'logs_2.sqlite').as_uri()+'?mode=ro',uri=True,timeout=.5) as db:
             db.execute('ATTACH DATABASE ? AS st',((ROOT/'state_5.sqlite').as_uri()+'?mode=ro',))
-            parents = db.execute("SELECT DISTINCT t.id FROM logs l JOIN st.threads t ON t.id=l.thread_id WHERE l.process_uuid LIKE ? AND l.ts>=? AND (t.thread_source='user' OR (t.thread_source IS NULL AND t.source='cli')) LIMIT 2",(f'pid:{pid}:%',start)).fetchall()
+            parents = db.execute("SELECT DISTINCT t.id,t.rollout_path FROM logs l JOIN st.threads t ON t.id=l.thread_id WHERE l.process_uuid LIKE ? AND l.ts>=? AND (t.thread_source='user' OR (t.thread_source IS NULL AND t.source='cli')) LIMIT 2",(f'pid:{pid}:%',start)).fetchall()
             if len(parents)!=1:
                 return {'stage':stage,'children':[]}
             stage = 'children'
-            rows = db.execute('SELECT t.id,t.agent_path,t.model,t.rollout_path,e.status FROM st.thread_spawn_edges e JOIN st.threads t ON t.id=e.child_thread_id WHERE e.parent_thread_id=? ORDER BY t.created_at DESC LIMIT 16',parents[0]).fetchall()
-            return {'stage':'ready','children':[dict(id=i,name=(name or 'Agent').split('/')[-1],model=model,state=state_of(path,edge)) for i,name,model,path,edge in rows]}
+            rows = db.execute('SELECT t.id,t.agent_path,t.model,t.rollout_path,e.status FROM st.thread_spawn_edges e JOIN st.threads t ON t.id=e.child_thread_id WHERE e.parent_thread_id=? ORDER BY t.created_at DESC LIMIT 16',(parents[0][0],)).fetchall()
+            return {'stage':'ready','parentState':state_of(parents[0][1],'open'),'children':[dict(id=i,name=(name or 'Agent').split('/')[-1],model=model,state=state_of(path,edge)) for i,name,model,path,edge in rows]}
     except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError):
         return {'stage':stage,'children':[]}
 

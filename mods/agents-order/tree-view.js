@@ -64,7 +64,7 @@ export function sidebarRows(t, spaces, machineList, tree, view, drawAgents) {
       .when(open && s.active && s.branch, el => el.child(div().pl(51).pb(2).text_size(11.5).text_color(t.dim)
         .child(s.branch.replace(/([/-])/g,'$1\u200b'))))
       .when(open && members.length, el => el.child(v_flex().relative().pl(24)
-        .child(div().absolute().left(16).top(4).bottom(4).w(1).bg(t.border))
+        .child(div().absolute().left(16).top(4).bottom(16).w(1).bg(t.border))
         .children(drawAgents(members))))
       .when(mark, el => el.child(div().absolute().left(1).right(1).h(2).bg(t.accent)
         .when(drag.after, line => line.bottom(0)).when(!drag.after,line => line.top(0))));

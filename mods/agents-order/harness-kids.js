@@ -7,7 +7,7 @@ export function childRows(packet,pid) {
     const id = clean(item?.id), name = clean(item?.name);
     if (!id || !name || seen.has(id)) continue;
     seen.add(id);
-    rows.push({id,name,model:clean(item.model),state:['working','permission','reply','review','idle','blocked','unknown'].includes(item.state) ? item.state : 'unknown'});
+    rows.push({id,name,model:clean(item.model),state:['working','permission','reply','review','idle','completed','blocked','unknown'].includes(item.state) ? item.state : 'unknown'});
   }
   return rows;
 }

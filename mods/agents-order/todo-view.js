@@ -14,17 +14,27 @@ export function statusIcon(state, t) {
   return svg("mods/agents-order/idle.svg").size(14).flex_none().text_color(t.dim);
 }
 
+// 八个固定点沿方框依次点亮；由宿主动画驱动，隐藏时自动停止。
+function squareActivity(t) {
+  const points = [[0,0],[5,0],[10,0],[10,5],[10,10],[5,10],[0,10],[0,5]];
+  return div().relative().size(13).flex_none().tooltip('运行中').children(points.map(([x,y], i) =>
+    div().absolute().left(x).top(y).size(3).rounded_full().bg(t.border)
+      .child(div().absolute().left(0).top(-5).text_size(10).text_color(t.foreground)
+        .frames(points.map((_, step) => (step - i + points.length) % points.length < 3 ? '•' : ' '),125))));
+}
+
 // 行尾轻提示使用同一笔画和字号；仅授权使用提醒色。
 export function hintView(t, hint, count, open, compact = false) {
   const paths = { permission:"permission", reply:"reply", review:"review", idle:"idle" };
   const busy = hint.icon === "working";
-  const path = busy ? "mods/workspace-chrome/spinner.svg" : "mods/agents-order/" + paths[hint.icon] + ".svg";
-  const icon = svg(path).size(13).flex_none().text_color(hint.icon === "permission" ? t.working : t.muted);
+  const path = hint.icon === "completed" ? "mods/workspace-chrome/check.svg" : busy ? "mods/workspace-chrome/spinner.svg" : "mods/agents-order/" + paths[hint.icon] + ".svg";
+  const icon = svg(path).size(13).flex_none().text_color(hint.icon === "completed" ? t.accent : hint.icon === "permission" ? t.working : t.muted);
   return h_flex().gap(3).flex_none().items_center()
     .when(!compact && count > 1, el => el.id("items-" + open.id).cursor_pointer().tooltip("查看这 " + count + " 项")
       .on_click((_e,cx) => { cx.stop_propagation(); open.show(cx); }))
-    .child(busy ? icon.spin(900) : icon)
-    .when(!compact && Boolean(hint.text), el => el.child(div().text_size(12).text_color(t.muted).child(hint.text)));
+
+    .when(!compact && Boolean(hint.text), el => el.child(div().text_size(12).text_color(t.muted).child(hint.text)))
+    .child(busy ? squareActivity(t) : hint.icon === "completed" ? icon.tooltip("本轮已完成") : icon);
 }
 
 export function modeHeader(t, detail, back, right) {
