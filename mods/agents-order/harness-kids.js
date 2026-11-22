@@ -2,7 +2,7 @@
 const states = new Set(['working','permission','reply','review','idle','completed','blocked','unknown']);
 const failures = new Map([
   ['worker','子会话读取进程失败'], ['response','子会话读取响应无效'],
-  ['process','父进程读取失败'], ['identity','父会话身份未确认'],
+  ['process','父进程读取失败'],
   ['children','子会话关系读取失败'], ['label','子会话发布数据无效'],
 ]);
 
@@ -76,7 +76,7 @@ export function childPacketFor(term, packets, useLabel = true) {
 
 // 失败状态以固定文案呈现。已保存的子项只继续提供身份展示，状态降级为未知。
 export function childRows(packet,pid) {
-  if (!validPacket(packet,pid)) return [];
+  if (!validPacket(packet,pid) || packet.stage === 'identity') return [];
   const reading = failures.get(packet.stage);
   const seen = new Set(), rows = [];
   const clean = value => typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g,'').slice(0,80) : '';

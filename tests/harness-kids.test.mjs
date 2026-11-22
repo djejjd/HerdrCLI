@@ -40,13 +40,13 @@ test('身份失败、变化或终端重建时不展示旧父会话的行', () =>
   assert.equal(childPacketFor(restarted,first),null);
   const pending = updateChildPackets(first,[local],[restarted],ready);
   assert.equal(childPacketFor(restarted,pending),null);
-  for (const snapshot of [packet('identity'), packet('children',{identity:'b'.repeat(32)})]) {
-    const next = updateChildPackets(first,[local],[local],result(snapshot));
-    const visible = childRows(childPacketFor(local,next),12);
-    assert.equal(visible[0].state,'unknown');
-    assert.equal(visible[0].id,null);
-    assert.notEqual(visible[0].name,row.name);
-  }
+  const unverified = updateChildPackets(first,[local],[local],result(packet('identity')));
+  assert.deepEqual(childRows(childPacketFor(local,unverified),12),[]);
+
+  const changed = updateChildPackets(first,[local],[local],result(packet('children',{identity:'b'.repeat(32)})));
+  assert.deepEqual(childRows(childPacketFor(local,changed),12),[
+    {id:null,name:'子会话关系读取失败',model:'',state:'unknown'},
+  ]);
 });
 
 test('畸形发布标签回到本机读数，子进程异常只显示固定阶段', () => {
