@@ -809,11 +809,11 @@ export default class Agents extends View {
     }
     const virtualRow = (kid, index, siblings) => {
       const names = {working:'运行中',permission:'待授权',reply:'待回应',review:'待审核',idle:'空闲',blocked:'阻塞',unknown:'状态未知',completed:'本轮已完成'};
-      return h_flex().relative().pl(38).pr(8).h(26).flex_none().gap(5).items_center().tooltip(names[kid.state])
+      return h_flex().relative().pl(38).pr(8).h(26).flex_none().gap(5).items_center().tooltip([kid.name,kid.model,kid.id,names[kid.state]].filter(Boolean).join(' · '))
         .child(div().absolute().left(17).top(index === 0 ? -4 : 0).bottom(index === siblings.length - 1 ? 12 : 0).w(1).bg(t.border))
         .child(div().absolute().left(17).top(13).w(14).h(1).bg(t.border))
         .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child([kid.name,kid.model].filter(Boolean).join(' · ')))
-        .child(kid.state === 'unknown' ? div().text_color(t.dim).child('·') : kid.state === 'blocked' ? statusIcon('blocked',t) : hintView(t,{icon:kid.state},0,{},true));
+        .child(['unknown','blocked'].includes(kid.state) ? h_flex().size(20).items_center().justify_center().child(kid.state === 'unknown' ? div().text_color(t.dim).child('·') : statusIcon('blocked',t)) : hintView(t,{icon:kid.state},0,{},true));
     };
     const withKids = (a, i, members) => {
       const subs = collapsed ? [] : this.tree(all, a.address);
@@ -867,9 +867,7 @@ export default class Agents extends View {
       if (detail.get(a.address) == null && seen[`${a.space_name}\u0000`] > 1) detail.set(a.address, label(a));
     }
 
-    const taskName = a => this.nameById.get(a.address) || detail.get(a.address) || '';
-    const hasTask = a => Boolean(taskName(a) && taskName(a) !== a.program?.name);
-    const rowHeight = a => unified && hasTask(a) ? 43 : 30;
+
     const row = (a, i, subs = [], members = []) => {
       const pic = icon(a.program, 16, a.program?.key === "shell" ? t.muted : t.foreground);
       const more = detail.get(a.address);
@@ -915,13 +913,14 @@ export default class Agents extends View {
       const storedName = this.nameById?.get(a.address) || "";
       const fallbackName = full ? a.space_name || label(a) : more ?? (/^\d+$/.test(label(a)) ? a.program?.name || label(a) : label(a));
       const name = storedName || fallbackName;
+      const singleName = storedName || (more && more !== a.address ? more : '') || a.program?.name || name;
       return h_flex()
         .id(`ag-${a.address}`)
         .px(8)
-        .h(rowHeight(a))
+        .h(30)
         .when(unified, el => el.mb(4))
         .relative()
-        .when(unified, el => el.child(div().absolute().left(-8).top(hasTask(a) ? 13 : 15)
+        .when(unified, el => el.child(div().absolute().left(-8).top(15)
           .w(8).h(1).bg(t.border)))
         .flex_none()
         .rounded(8)
@@ -961,10 +960,8 @@ export default class Agents extends View {
             this.folded.has(a.address) ? this.folded.delete(a.address) : this.folded.add(a.address);
             cx.notify();
           })).child(pic)))
-        .when(unified, el => el.child(v_flex().flex_1().min_w(0)
-          .child(h_flex().min_w(0).gap(5).items_center()
-            .child(div().truncate().font_semibold().child(a.program?.name || name)))
-          .when(hasTask(a), line => line.child(div().truncate().tooltip(taskName(a)).text_size(11.5).text_color(t.muted).child(taskName(a))))))
+        .when(unified, el => el.child(div().flex_1().min_w(0).truncate().font_semibold()
+          .tooltip([singleName, a.program?.name, a.address].filter(Boolean).join(' · ')).child(singleName)))
         .when(!unified, el => el.child(h_flex().flex_1().min_w(0).gap(5).items_center()
           .child(div().min_w(0).when(!unified, el => el.max_w(full && more ? 120 : 200)).truncate().tooltip(name).text_color(idle ? t.muted : t.foreground).child(name))
           .when(full && Boolean(more), el => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(`\u00b7 ${more}`)))))
@@ -1016,7 +1013,7 @@ export default class Agents extends View {
     const groupRows = g => {
       if (byPriority || g.id === "pinned") return g.members.flatMap((a, i) => withKids(a, i, g.members));
       const heights = Object.fromEntries(g.members.map(a => [
-        a.address, rowHeight(a) + (unified ? 4 : 0) + (this.folded.has(a.address) ? 0 : (this.tree(all, a.address).length + (virtual.get(a.address)?.length ?? 0)) * 26),
+        a.address, 30 + (unified ? 4 : 0) + (this.folded.has(a.address) ? 0 : (this.tree(all, a.address).length + (virtual.get(a.address)?.length ?? 0)) * 26),
       ]));
       const drag = this.drag?.space === g.members[0]?.space ? this.drag : null;
       const positions = projectedPositions(g.members, drag?.address, drag?.target, heights);

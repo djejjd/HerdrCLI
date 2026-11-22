@@ -23,18 +23,27 @@ function squareActivity(t) {
         .frames(points.map((_, step) => (step - i + points.length) % points.length < 3 ? '•' : ' '),125))));
 }
 
+// 将主题完成绿与次级文字色混合，让细勾在浅、深色侧栏中都柔和一些。
+function completedTone(t) {
+  if (![t.done, t.muted].every(c => /^#[0-9a-f]{6}$/i.test(c))) return t.done;
+  const channel = (color, i) => parseInt(color.slice(i, i + 2), 16);
+  return '#' + [1, 3, 5].map(i => Math.round(channel(t.done, i) * 0.4 + channel(t.muted, i) * 0.6)
+    .toString(16).padStart(2, '0')).join('');
+}
+
 // 行尾轻提示使用同一笔画和字号；仅授权使用提醒色。
 export function hintView(t, hint, count, open, compact = false) {
   const paths = { permission:"permission", reply:"reply", review:"review", idle:"idle" };
   const busy = hint.icon === "working";
-  const path = hint.icon === "completed" ? "mods/workspace-chrome/check.svg" : busy ? "mods/workspace-chrome/spinner.svg" : "mods/agents-order/" + paths[hint.icon] + ".svg";
-  const icon = svg(path).size(hint.icon === "completed" ? 20 : 13).flex_none().text_color(hint.icon === "completed" ? t.accent : hint.icon === "permission" ? t.working : t.muted);
+  const path = hint.icon === "completed" ? "mods/agents-order/completed.svg" : busy ? "mods/workspace-chrome/spinner.svg" : "mods/agents-order/" + paths[hint.icon] + ".svg";
+  const icon = svg(path).size(hint.icon === "idle" ? 17 : 13).flex_none().text_color(hint.icon === "completed" ? completedTone(t) : hint.icon === "permission" ? t.working : t.muted);
   return h_flex().gap(3).flex_none().items_center()
     .when(!compact && count > 1, el => el.id("items-" + open.id).cursor_pointer().tooltip("查看这 " + count + " 项")
       .on_click((_e,cx) => { cx.stop_propagation(); open.show(cx); }))
 
     .when(!compact && Boolean(hint.text), el => el.child(div().text_size(12).text_color(t.muted).child(hint.text)))
-    .child(busy ? squareActivity(t) : hint.icon === "completed" ? icon.tooltip("本轮已完成") : icon);
+    .child(h_flex().size(20).flex_none().items_center().justify_center()
+      .child(busy ? squareActivity(t) : hint.icon === "completed" ? icon.tooltip("本轮已完成") : icon));
 }
 
 export function modeHeader(t, detail, back, right) {

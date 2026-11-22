@@ -3,7 +3,7 @@ import { h_flex, v_flex } from "gpui-base";
 import { spaces, agents, theme, run, window, keys, props, focused, terminals, exec, layout, checking, appHome, openOverlay } from "herdr";
 
 import { showFooter } from './fee.js';
-import { quotaSelection, quotaReadings, modelReadingKey, rememberModelReading, resetLabel } from './model.js';
+import { footerReadings, quotaSelection, quotaReadings, modelReadingKey, rememberModelReading, resetLabel } from './model.js';
 
 export default class WorkspaceStatus extends View {
   init(_props, cx) {
@@ -110,13 +110,15 @@ export default class WorkspaceStatus extends View {
     const model = route?.model || terminal?.report?.model || named || (flag >= 0 && argv[flag + 1]) || '';
     const selection = quotaSelection(this.cards, route?.provider, route?.account);
     const card = selection.current ?? selection.reference;
-    const readings = card ? quotaReadings(card).slice(0, 2) : [];
+    const readings = card ? footerReadings(card) : [];
     const data = {...selection, model:model || '当前终端', stale:this.stale};
     return h_flex().id('magpie-quota').max_w(440).min_w(0).gap(6).items_center().cursor_pointer()
       .tooltip(selection.reference ? '额度来源：' + (card.alias || card.name || card.provider) : '查看当前终端及其他模型额度')
       .on_click(() => openOverlay({mod:'magpie-status', kind:'popup', width:330, height:Math.min(380, 110 + this.cards.length * 23), props:{details:data}}))
       .when(Boolean(model), el => el.child(div().min_w(0).truncate().text_color(t.muted).child(model)))
-      .when(Number.isFinite(route?.cost), el => el.child(div().text_color(t.foreground).child('约 $' + route.cost.toFixed(2))))
+      .when(model && Number.isFinite(route?.cost), el => el.child(div().text_color(t.dim).child('·')))
+      .when(Number.isFinite(route?.cost), el => el.child(div().text_color(t.foreground).child('本会话约 $' + route.cost.toFixed(2))))
+      .when((model || Number.isFinite(route?.cost)) && readings.length, el => el.child(div().text_color(t.dim).child('·')))
       .when(readings.length, el => el.child(this.readingsView(t, readings).flex_none()))
       .when(Boolean(readings.length && this.stale), el => el.child(div().text_color(t.dim).child('缓存')))
       .child(div().text_color(t.dim).child('▴'));

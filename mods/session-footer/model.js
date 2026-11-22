@@ -88,3 +88,12 @@ export function resetLabel(value, now = Date.now()) {
   const today = new Date(now + offset * 60000).toISOString().slice(0, 10);
   return day === today ? clock : day.slice(5) + ' ' + clock;
 }
+
+// 底栏只呈现一种读数，同时提供金额与窗口时优先使用余额。
+export function footerReadings(card) {
+  const readings = quotaReadings(card);
+  const balance = readings.find(reading => reading.label === '余额');
+  if (balance) return [balance];
+  return readings.slice(0, 2).map((reading, i) => ({...reading,
+    label:i === 0 && reading.label !== '额度' ? '额度 ' + reading.label : reading.label}));
+}
