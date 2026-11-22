@@ -108,3 +108,68 @@ with tempfile.TemporaryDirectory() as fixture:
   assert.notEqual(newer.children[1].revision,ok.children[1].revision);
   assert.deepEqual(failed,{stage:'children',identity:ok.identity,children:[]});
 });
+
+test('跨过多个读取块寻找最近状态，完整的大完成事件仍生成轮次版本', () => {
+  const reader = fileURLToPath(new URL('../mods/agents-order/codex-children.py',import.meta.url));
+  const run = execFileSync('python3',['-B','-c',`
+import json, pathlib, runpy, sys, tempfile
+
+state_of = runpy.run_path(sys.argv[1])['state_of']
+
+def event(kind, **data):
+    return json.dumps({'type':'event_msg','payload':{'type':kind, **data}}).encode() + b'\\n'
+
+with tempfile.TemporaryDirectory() as directory:
+    path = pathlib.Path(directory) / 'session.jsonl'
+    unknown = json.dumps({'type':'response_item','payload':{'output':'private-fixture' * 24000}}).encode() + b'\\n'
+    old = event('task_complete',turn_id='old')
+    with path.open('wb') as stream:
+        stream.write(old + event('task_started') + unknown)
+    working = state_of(str(path),'open')
+    closed = state_of(str(path),'closed')
+    big = event('task_complete',turn_id='new',last_agent_message='private-text' * 9500)
+    with path.open('ab') as stream:
+        stream.write(big + b'{"type":"response_item"}')
+    completed = state_of(str(path),'open')
+    assert b'private-text' not in json.dumps(completed).encode()
+    print(json.dumps([working,closed,completed]))
+`,reader],{encoding:'utf8'});
+  const [working,closed,completed] = JSON.parse(run);
+  assert.deepEqual(working,['working',null]);
+  assert.deepEqual(closed,['idle',null]);
+  assert.equal(completed[0],'completed');
+  assert.ok(Number.isSafeInteger(completed[1]));
+});
+
+test('触及单文件和批次预算时保持未知，避免把截断尾巴当成状态', () => {
+  const reader = fileURLToPath(new URL('../mods/agents-order/codex-children.py',import.meta.url));
+  const run = execFileSync('python3',['-B','-c',`
+import io, json, runpy, sys
+
+loaded = runpy.run_path(sys.argv[1])
+state_of = loaded['state_of']
+newest = b'{"type":"event_msg","payload":{"type":"task_complete","turn_id":"fake"}}'
+data = b'x' * (5 * 1024 * 1024) + newest + b' ' * (65536 - len(newest))
+read_bytes = 0
+
+class TracedReader(io.BytesIO):
+    def read(self, size=-1):
+        global read_bytes
+        content = super().read(size)
+        read_bytes += len(content)
+        return content
+
+state_of.__globals__['open'] = lambda *args: TracedReader(data)
+state = state_of('fixture','open')
+single_bytes = read_bytes
+read_bytes = 0
+budget = loaded['ScanBudget']()
+for index in range(12):
+    assert state_of('fixture','open',budget) == ('unknown',None)
+print(json.dumps([state,single_bytes,read_bytes]))
+`,reader],{encoding:'utf8'});
+  const [state,readBytes,batchBytes] = JSON.parse(run);
+  assert.deepEqual(state,['unknown',null]);
+  assert.ok(readBytes > 64 * 1024 && readBytes <= 4 * 1024 * 1024);
+  assert.equal(batchBytes,32 * 1024 * 1024);
+});
