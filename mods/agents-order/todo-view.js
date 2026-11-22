@@ -28,7 +28,7 @@ export function hintView(t, hint, count, open, compact = false) {
   const paths = { permission:"permission", reply:"reply", review:"review", idle:"idle" };
   const busy = hint.icon === "working";
   const path = hint.icon === "completed" ? "mods/workspace-chrome/check.svg" : busy ? "mods/workspace-chrome/spinner.svg" : "mods/agents-order/" + paths[hint.icon] + ".svg";
-  const icon = svg(path).size(13).flex_none().text_color(hint.icon === "completed" ? t.accent : hint.icon === "permission" ? t.working : t.muted);
+  const icon = svg(path).size(hint.icon === "completed" ? 20 : 13).flex_none().text_color(hint.icon === "completed" ? t.accent : hint.icon === "permission" ? t.working : t.muted);
   return h_flex().gap(3).flex_none().items_center()
     .when(!compact && count > 1, el => el.id("items-" + open.id).cursor_pointer().tooltip("查看这 " + count + " 项")
       .on_click((_e,cx) => { cx.stop_propagation(); open.show(cx); }))
