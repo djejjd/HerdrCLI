@@ -82,9 +82,9 @@ with tempfile.TemporaryDirectory() as fixture:
         logs.execute("INSERT INTO logs VALUES ('parent','pid:12:fixture',9999999999)")
         logs.commit()
     with closing(sqlite3.connect(root/'state_5.sqlite')) as state:
-        state.execute('CREATE TABLE threads(id, rollout_path, thread_source, source, agent_path, model, created_at)')
-        state.executemany('INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, ?)', [
-            (name,str(root/name),'user' if name == 'parent' else 'subagent','cli',name,'model',idx)
+        state.execute('CREATE TABLE threads(id, rollout_path, thread_source, source, agent_path, model, created_at, updated_at_ms)')
+        state.executemany('INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [
+            (name,str(root/name),'user' if name == 'parent' else 'subagent','cli',name,'model',idx,100+idx)
             for idx,name in enumerate(('parent','good','bad'))
         ])
         state.execute('CREATE TABLE thread_spawn_edges(parent_thread_id, child_thread_id, status)')

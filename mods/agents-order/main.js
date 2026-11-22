@@ -1,3 +1,4 @@
+import {toggleWidth,visibleChildren} from './sidebar-policy.js';
 import { childRows, childReadTargets, updateChildPackets, childPacketFor } from './harness-kids.js';
 import { sidebarIndex, sidebarAgents, needsSinglePane } from "./unified-sidebar-index.js";
 import { sidebarRows } from "./tree-view.js";
@@ -28,6 +29,17 @@ const narrow = () => (find(layout(), "sidebar")?.size?.px ?? Infinity) < 160;
 
 // To the rail (on macOS wide enough for the traffic lights), or back to the width it had.
 function toggleSidebar() {
+  const tree = layout();
+  const bar = find(tree,'sidebar');
+  if (find(tree,'brand')?.content?.props?.widthPolicy && bar) {
+    const width = bar.size?.px ?? 268;
+    const rail = herdrWindow()?.platform === 'macos' ? 76 : 44;
+    const next = toggleWidth(width,shared('sidebar.width'),rail);
+    if (width >= 160) setShared('sidebar.width',width);
+    const replacement = {...bar,min:next.min,max:next.px === rail ? rail : 480,size:{px:next.px},resizable:next.px !== rail};
+    run('layout.set',{layout:{...tree,children:tree.children.map(n => n.id === 'sidebar' ? replacement : n)}});
+    return;
+  }
   const width = find(layout(), "sidebar")?.size?.px;
   if (!narrow()) setShared("sidebar.width", width);
   // Mods edited before the rail went by width still read the flag.
@@ -807,11 +819,11 @@ export default class Agents extends View {
     this.localAgentTerms = new Map(all.map(t => [t.address,t]));
     const virtual = new Map();
     if (unified && !collapsed) for (const term of all) {
-      virtual.set(term.address,childRows(childPacketFor(term,this.childPackets),term.foreground?.pid));
+      virtual.set(term.address,visibleChildren(childRows(childPacketFor(term,this.childPackets),term.foreground?.pid),term.labels?.['workbench.received.v1']));
     }
     const virtualRow = (kid, index, siblings) => {
       const names = {working:'运行中',permission:'待授权',reply:'待回应',review:'待审核',idle:'空闲',blocked:'阻塞',unknown:'状态未知',completed:'本轮已完成'};
-      return h_flex().relative().pl(38).pr(8).h(26).flex_none().gap(5).items_center().tooltip(kid.state === 'unknown' ? '状态未知' : [kid.name,kid.model,kid.id,names[kid.state],kid.reading].filter(Boolean).join(' · '))
+      return h_flex().relative().pl(38).pr(8).h(26).flex_none().gap(5).items_center().tooltip(names[kid.state])
         .child(div().absolute().left(17).top(index === 0 ? -4 : 0).bottom(index === siblings.length - 1 ? 12 : 0).w(1).bg(t.border))
         .child(div().absolute().left(17).top(13).w(14).h(1).bg(t.border))
         .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child([kid.name,kid.model].filter(Boolean).join(' · ')))

@@ -57,10 +57,10 @@ def snapshot(pid):
             # 用父线程、进程及启动时间生成不可直接读出原始标识的比较值。
             identity = {'identity':hashlib.sha256(f'{pid}:{start}:{parent_id}'.encode()).hexdigest()[:32]}
             stage = 'children'
-            rows = db.execute('SELECT t.id,t.agent_path,t.model,t.rollout_path,e.status FROM st.thread_spawn_edges e JOIN st.threads t ON t.id=e.child_thread_id WHERE e.parent_thread_id=? ORDER BY t.created_at DESC LIMIT 16',(parent_id,)).fetchall()
+            rows = db.execute('SELECT t.id,t.agent_path,t.model,t.rollout_path,e.status,t.updated_at_ms FROM st.thread_spawn_edges e JOIN st.threads t ON t.id=e.child_thread_id WHERE e.parent_thread_id=? ORDER BY t.created_at DESC LIMIT 16',(parent_id,)).fetchall()
             children = [dict(id=i,name=(name if isinstance(name,str) and name else 'Agent').split('/')[-1],
-                             model=model if isinstance(model,str) else '',state=state_of(path,edge))
-                        for i,name,model,path,edge in rows if isinstance(i,str)]
+                             model=model if isinstance(model,str) else '',state=state_of(path,edge),revision=revision)
+                        for i,name,model,path,edge,revision in rows if isinstance(i,str)]
             return {'stage':'ready',**identity,'parentState':state_of(parent_path,'open'),'children':children}
     except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError):
         return {'stage':stage,**identity,'children':[]}

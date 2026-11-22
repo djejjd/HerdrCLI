@@ -17,6 +17,17 @@ const narrow = () => (find(layout(), "sidebar")?.size?.px ?? Infinity) < 160;
 // To the rail (on macOS wide enough for the traffic lights), or back to the width it had.
 // 折叠=整块隐藏，不再缩成 76 窄条（手动最窄由布局 min 240 保证）。
 function toggleSidebar() {
+  const tree = layout();
+  const bar = find(tree,'sidebar');
+  if (find(tree,'brand')?.content?.props?.widthPolicy && bar) {
+    const width = bar.size?.px ?? 268;
+    const rail = window()?.platform === 'macos' ? 76 : 44;
+    const next = width < 160 ? {min:240,px:Math.min(480,Math.max(240,shared('sidebar.width') || 268))} : {min:rail,px:rail};
+    if (width >= 160) setShared('sidebar.width',width);
+    const replacement = {...bar,min:next.min,max:next.px === rail ? rail : 480,size:{px:next.px},resizable:next.px !== rail};
+    run('layout.set',{layout:{...tree,children:tree.children.map(n => n.id === 'sidebar' ? replacement : n)}});
+    return;
+  }
   run("layout.toggle", { id: "sidebar" });
 }
 
