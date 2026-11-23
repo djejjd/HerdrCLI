@@ -31,6 +31,15 @@ test('后台完成直到首次查看，切走后仍在六十秒边界恢复空�
   assert.equal(icon('idle', 150999, false, packet), 'completed');
   assert.equal(icon('idle', 151000, false, packet), 'idle');
   assert.equal(icon('working', 151001, false, packet), 'working');
-  assert.equal(icon('idle', 151002, false, packet), 'working');
+  assert.equal(icon('idle', 151002, false, packet), 'idle');
   assert.equal(icon('idle', 151003, true, {...packet,parentRevision:102}), 'completed');
+});
+
+test('启动后等待首条消息时恢复空闲，开始处理时再次显示运行中', () => {
+  const state = {};
+  const icon = status => completionIcon(state, {status, now:0, focused:true});
+  assert.equal(icon('working'), 'working');
+  assert.equal(icon('idle'), 'idle');
+  assert.equal(state.deadline, null);
+  assert.equal(icon('working'), 'working');
 });

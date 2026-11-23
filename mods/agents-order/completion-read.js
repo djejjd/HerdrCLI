@@ -21,7 +21,7 @@ export function completionIcon(state, {status, now, focused, packet}) {
       state.phase = 'completed';
       state.deadline = null;
     }
-  } else if (packet?.parentState === 'idle' || (state.phase === 'blocked' && status === 'idle')) {
+  } else if (packet?.parentState === 'idle' || (status === 'idle' && ['blocked', 'working'].includes(state.phase))) {
     state.phase = 'idle';
   }
   if (state.phase === 'completed' && focused) state.deadline ??= now + 60000;
