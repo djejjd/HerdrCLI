@@ -7,6 +7,7 @@ import { sidebarRows } from "./tree-view.js";
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle, InputState, Input } from "gpui-base";
 import { machines, agents, terminals, panes, focused, spaces, run, hc, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window as herdrWindow, layout, checking, home, appHome, readTextFile, exec, notify } from "herdr";
+import { completionIcon } from './completion-read.js';
 import { showGrip, orderedGroup, orderedBySpace, reorderGroup, dragDecision, releaseTime, dropIndex, rowCenters, projectedPositions, persistOrder } from "./order.js";
 import { groupRowItems, rowHint, TodoStore, navigationPlan, preserveSelection, applyModeAction } from "./todo.js";
 import { hintView, modeHeader, todoBody, todoRefreshIcon, statusIcon } from "./todo-view.js";
@@ -227,9 +228,7 @@ export default class Agents extends View {
   hint(agent, compact = false) {
     const items = this.rowItems.byAddress.get(agent.address) ?? [];
     const hint = rowHint(agent, items);
-    const term = this.localAgentTerms?.get(agent.address);
-    const packet = term ? childPacketFor(term,this.childPackets,false) : null;
-    if (hint.icon === 'idle' && (packet?.parentState === 'completed' || agent.status === 'completed')) hint.icon = 'completed';
+    if (hint.icon === 'idle') hint.icon = this.completionIcons?.get(agent.address) ?? 'idle';
     return hintView(theme(), hint, items.length,
       { id:agent.address, show:cx => this.showItems(agent.address, cx) }, compact);
   }
@@ -686,6 +685,8 @@ export default class Agents extends View {
   }
 
   close() {
+    this.readTimer?.cancel();
+    this.readStates?.clear();
     this.spaceDrag = null;
     this.closed = true;
     this.machineTimer?.cancel();
@@ -777,6 +778,29 @@ export default class Agents extends View {
       .child(this.hint({ ...k, status:st }));
   }
 
+  updateCompletion(list, cx, now) {
+    const focus = focused();
+    const active = herdrWindow()?.active && (focus?.shown ?? focus?.terminal);
+    const next = new Map();
+    let earliest = Infinity;
+    this.completionIcons = new Map();
+    for (const agent of list) {
+      const term = this.localAgentTerms.get(agent.address);
+      const key = JSON.stringify([agent.address,term?.created_ms,term?.foreground?.pid]);
+      const state = this.readStates?.get(key) ?? {};
+      const packet = term && childPacketFor(term,this.childPackets,false);
+      const icon = completionIcon(state,{status:agent.status, packet, now, focused:active === agent.address});
+      next.set(key,state);
+      this.completionIcons.set(agent.address,icon);
+      earliest = Math.min(earliest,state.deadline ?? Infinity);
+    }
+    this.readStates = next;
+    if (this.readDeadline === earliest) return;
+    this.readTimer?.cancel();
+    this.readDeadline = earliest;
+    this.readTimer = Number.isFinite(earliest) ? cx.timer.after(Math.max(1,earliest-now), cx => cx.notify()) : null;
+  }
+
   render(cx) {
     const t = theme();
     if (props()?.rowMenu) return this.rowMenu(t, props().rowMenu);
@@ -814,9 +838,9 @@ export default class Agents extends View {
     const rest = list.filter((a) => !a.pinned);
     list = [...pinned, ...rest];
     setAgentOrder(list.map((a) => a.address));
-    if (this.mode === "todo") return this.todoShell(t);
-
     this.localAgentTerms = new Map(all.map(t => [t.address,t]));
+    this.updateCompletion(list, cx, now);
+    if (this.mode === "todo") return this.todoShell(t);
     const virtual = new Map();
     if (unified && !collapsed) for (const term of all) {
       const packet = childPacketFor(term,this.childPackets);

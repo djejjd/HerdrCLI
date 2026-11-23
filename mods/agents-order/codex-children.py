@@ -108,7 +108,7 @@ def snapshot(pid, budget=None):
             identity = {'identity':hashlib.sha256(f'{pid}:{start}:{parent_id}'.encode()).hexdigest()[:32]}
             stage = 'children'
             rows = db.execute('SELECT t.id,t.agent_path,t.model,t.rollout_path,e.status FROM st.thread_spawn_edges e JOIN st.threads t ON t.id=e.child_thread_id WHERE e.parent_thread_id=? ORDER BY t.created_at DESC LIMIT 16',(parent_id,)).fetchall()
-            parent_state = state_of(parent_path,'open',budget)[0]
+            parent_state, parent_revision = state_of(parent_path,'open',budget)
             children = []
             for child_id,name,model,path,edge in rows:
                 if not isinstance(child_id,str):
@@ -116,7 +116,7 @@ def snapshot(pid, budget=None):
                 state, revision = state_of(path,edge,budget)
                 children.append(dict(id=child_id,name=(name if isinstance(name,str) and name else 'Agent').split('/')[-1],
                                      model=model if isinstance(model,str) else '',state=state,revision=revision))
-            return {'stage':'ready',**identity,'parentState':parent_state,'children':children}
+            return {'stage':'ready',**identity,'parentState':parent_state,'parentRevision':parent_revision,'children':children}
     except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError):
         return {'stage':stage,**identity,'children':[]}
 
