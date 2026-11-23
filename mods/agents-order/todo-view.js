@@ -34,7 +34,7 @@ function completedTone(t) {
 
 // 行尾轻提示使用同一笔画和字号；仅授权使用提醒色。
 export function hintView(t, hint, count, open, compact = false) {
-  const paths = { permission:"permission", reply:"reply", review:"review", idle:"idle" };
+  const paths = { permission:"permission", reply:"reply", review:"review", idle:"idle", blocked:"blocked" };
   const busy = hint.icon === "working";
   const path = hint.icon === "completed" ? "mods/agents-order/completed.svg" : busy ? "mods/workspace-chrome/spinner.svg" : "mods/agents-order/" + paths[hint.icon] + ".svg";
   const icon = svg(path).size(hint.icon === "idle" ? 14 : 13).flex_none().text_color(hint.icon === "completed" ? completedTone(t) : hint.icon === "permission" ? t.working : t.muted);
