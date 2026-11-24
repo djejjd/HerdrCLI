@@ -98,3 +98,17 @@ test('底栏显隐规则与独立侧栏运行时一致', async () => {
     }
   }
 });
+
+test('长列表跨越和反向查找遵循相邻行中点，比较次数按对数增长', () => {
+  const centers = Array.from({length:8192}, (_, index) => index * 34 + 15);
+  let reads = 0;
+  const counted = new Proxy(centers, {get(target, key) {
+    if (/^\d+$/.test(String(key))) reads++;
+    return target[key];
+  }});
+  for (const index of [8190, 120, 4000, 3]) {
+    assert.equal(dropIndex(centers[index] + 17, counted), index + 1);
+    assert.equal(dropIndex(centers[index] + 16.99, counted), index);
+  }
+  assert.ok(reads <= 8 * 28, `坐标读取 ${reads} 次`);
+});
