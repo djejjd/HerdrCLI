@@ -688,7 +688,8 @@ export default class Agents extends View {
     this.moveDrag(point.y, cx);
     this.cancelDrag(cx);
     this.lastDragEnd = releaseTime(d, this.lastDragEnd ?? 0, Date.now());
-    const current = new Map(agents().map(a => [a.address, a]));
+    const rows = sidebarAgents(agents(), terminals(), panes(), spaces(), Boolean(props()?.tree));
+    const current = new Map(rows.map(a => [a.address, a]));
     d.valid = (props()?.tree || sortOf().id === "grouped") && d.members.every(a => {
       const live = current.get(a.address);
       return live?.space === d.space && !live.pinned;
