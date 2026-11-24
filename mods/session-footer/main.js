@@ -1,6 +1,6 @@
 import {View,div} from 'gpui-kit';
 import {h_flex,v_flex,Popover} from 'gpui-base';
-import {agents,theme,run,props,focused,terminals,exec,checking,appHome,openOverlay,closeOverlay} from 'herdr';
+import {shared,agents,theme,run,props,focused,terminals,exec,checking,appHome,openOverlay,closeOverlay} from 'herdr';
 import {showFooter} from './fee.js';
 import {modelReadingKey,quotaSelection,resetLabel} from './model.js';
 import {summary} from './summary.js';
@@ -46,7 +46,7 @@ export default class Footer extends View {
     const all=terminals(), address=selectedAddress();
     const current=all.find(term=>term.address===address);
     const visible=showFooter(address,agents(),current?.foreground?.name);
-    if (visible!==this.visible) {this.visible=visible; run(visible?'layout.show':'layout.hide',{id:'status'});}
+    if (shared('layout') !== 'agents-order' && visible!==this.visible) {this.visible=visible; run(visible?'layout.show':'layout.hide',{id:'status'});}
     if (visible && current) this.load(cx,address,cacheKey(current),15000);
     this.load(cx,'quota','quota',30000);
     if (this.pending.size<2) {
@@ -60,7 +60,7 @@ export default class Footer extends View {
   detail(data) {
     const colors=theme();
     const panel=v_flex().w(240).p(12).gap(8).rounded(8).bg(colors.popover).text_size(13).text_color(colors.foreground);
-    const line=(label,value)=>h_flex().gap(12).items_center().child(div().flex_1().text_color(colors.muted).child(label)).child(div().child(value));
+    const line=(label,value)=>h_flex().gap(12).items_center().child(div().flex_1().text_color(colors.muted).child(label)).child(div().min_w(64).font_family('Menlo').child(value));
     panel.child(line('本会话',data.fee.replace(/^本会话 /,'')));
     const amounts=(data.bill?.children || []).map(child=>child.amount).filter(Number.isFinite);
     if (amounts.length) panel.child(line('其中子 Agent','$'+amounts.reduce((sum,value)=>sum+value,0).toFixed(2)));

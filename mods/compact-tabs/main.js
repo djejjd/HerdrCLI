@@ -195,7 +195,7 @@ export default class Tabs extends View {
     const widths = new Map(tabs.map(tab => {
       const { name, program } = descriptions.get(tab.id);
       const text = Array.from(name).reduce((px, c) => px + (c.codePointAt(0) > 255 ? 14 : 8), 0);
-      return [tab.id, 27 + (program?.icon ? 21 : 0) + (tab.active ? 19 : 0) + (tab.status && tab.status !== "idle" ? 19 : 0) + text];
+      return [tab.id, 27 + (program?.icon ? 21 : 0) + (tab.active ? 19 : 0) + 19 + text];
     }));
     const shown = fitTabs(tabs, pins, recent, widths, this.stripWidth);
     const hidden = tabs.filter(tab => !shown.includes(tab));
@@ -208,7 +208,7 @@ export default class Tabs extends View {
       if (active >= 0) this.scroll.scroll_to_item(active);
     }
     const stop = (_e, cx) => cx.stop_propagation();
-    const button = (id, label, action) => div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
+    const button = (id, label, action) => div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground)).active(s => s.bg(t.selected))
       .on_mouse_down("left", stop).on_click(action).child(label);
     const item = (c, i) => {
       const { program, name } = descriptions.get(c.id);
@@ -226,8 +226,8 @@ export default class Tabs extends View {
         .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "compact-tabs", kind: "popup", width: 160, props: { context: c.id } }); })
         .when(Boolean(program?.icon), el => el.child(program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14)))
         .child(div().flex_1().min_w(0).truncate().tooltip(name).child(c.zoomed ? `${name} Z` : name))
-        .when(c.status === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
-        .when(c.status === "blocked" || c.status === "done", el => el.child(div().size(6).rounded(3).bg(t[c.status])))
+        .child(h_flex().size(12).flex_none().items_center().justify_center().when(c.status === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).when(shared("agents-order.motion") === true, icon => icon.spin(900))))
+        .when(c.status === "blocked" || c.status === "done", el => el.child(div().size(6).rounded(3).bg(t[c.status]))))
         .when(c.active, el => el.child(div().id(`close-${c.id}`).text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); run("tab.close", { id: c.id }); }).child(svg("mods/pane/close.svg").size(12))));
     };
     const root = layout(), sidebar = find(root, "sidebar"), w = window();

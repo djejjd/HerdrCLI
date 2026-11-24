@@ -41,13 +41,13 @@ export function releaseTime(drag, previous, now) {
 }
 
 // 每个主行 30px；展开的子行各占 26px，拖动命中按真实行心而非固定索引。
-export function rowCenters(origin, originCenter, children) {
+export function rowCenters(origin, originCenter, children, stride = 30) {
   const centers = new Array(children.length);
   centers[origin] = originCenter;
   for (let i = origin + 1; i < centers.length; i++)
-    centers[i] = centers[i - 1] + 30 + children[i - 1] * 26;
+    centers[i] = centers[i - 1] + stride + children[i - 1] * 26;
   for (let i = origin - 1; i >= 0; i--)
-    centers[i] = centers[i + 1] - 30 - children[i] * 26;
+    centers[i] = centers[i + 1] - stride - children[i] * 26;
   return centers;
 }
 
