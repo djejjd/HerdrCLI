@@ -7,6 +7,7 @@ import { sidebarRows } from "./tree-view.js";
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle, InputState, Input } from "gpui-base";
 import { machines, agents, terminals, panes, focused, spaces, run, hc, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window as herdrWindow, layout, checking, home, appHome, readTextFile, exec, notify } from "herdr";
+import { completionIcon } from './completion-read.js';
 import { showGrip, orderedGroup, orderedBySpace, reorderGroup, dragDecision, releaseTime, dropIndex, rowCenters, projectedPositions, persistOrder } from "./order.js";
 import { groupRowItems, rowHint, TodoStore, navigationPlan, preserveSelection, applyModeAction } from "./todo.js";
 import { hintView, modeHeader, todoBody, todoRefreshIcon, statusIcon } from "./todo-view.js";
@@ -101,6 +102,18 @@ function icon(p, size, color) {
 
 export default class Agents extends View {
   init(_props, cx) {
+    if (props()?.taskRecord) {
+      const record = props().taskRecord;
+      this.recordText = record.summary ?? '正在读取执行记录';
+      if (record.address) cx.spawn(async cx => {
+        try {
+          const result = await exec('node',[appHome()+'/mods/agents-order/task-history.mjs','read',record.address],{timeout:4000});
+          this.recordText = result.code === 0 ? JSON.parse(result.stdout) || '暂无执行输出' : '执行记录读取失败';
+        } catch {this.recordText='执行记录读取失败';}
+        if (!this.closed) cx.notify();
+      });
+      return;
+    }
     if (props()?.sortMenu || props()?.rowMenu) return;
     this.closed = false;
     if (props()?.rename) {
@@ -227,9 +240,7 @@ export default class Agents extends View {
   hint(agent, compact = false) {
     const items = this.rowItems.byAddress.get(agent.address) ?? [];
     const hint = rowHint(agent, items);
-    const term = this.localAgentTerms?.get(agent.address);
-    const packet = term ? childPacketFor(term,this.childPackets,false) : null;
-    if (hint.icon === 'idle' && (packet?.parentState === 'completed' || agent.status === 'completed')) hint.icon = 'completed';
+    if (hint.icon === 'idle') hint.icon = this.completionIcons?.get(agent.address) ?? 'idle';
     return hintView(theme(), hint, items.length,
       { id:agent.address, show:cx => this.showItems(agent.address, cx) }, compact);
   }
@@ -686,6 +697,8 @@ export default class Agents extends View {
   }
 
   close() {
+    this.readTimer?.cancel();
+    this.readStates?.clear();
     this.spaceDrag = null;
     this.closed = true;
     this.machineTimer?.cancel();
@@ -765,7 +778,13 @@ export default class Agents extends View {
       .hover((s) => s.bg(t.hover))
       .when(props()?.tree, el => el.on_mouse_down("right", (_e,cx) => { cx.stop_propagation(); this.openRowMenu(k.address); }))
       .when(!props()?.tree, el => el.on_hover((active, cx) => { this.hovered = active ? k.address : null; cx.notify(); }))
-      .on_click(() => (this.listed.has(k.address) ? run("pane.focus", { terminal: k.address }) : this.peek(k.address)))
+      .on_click(() => {
+        if (k.labels?.['workbench.child.kind']==='task') return this.openTaskRecord({address:k.address,name:this.nameById.get(k.address)});
+        const pane = panes().find(item=>item.terminal===k.address);
+        if (pane) return this.focusSession(pane.pane);
+        if (k.labels?.['workbench.child.kind']==='chat') return run('terminal.keep',{terminal:k.address,place:'tab'});
+        this.peek(k.address);
+      })
       .children(s.lines.map(l => div().self_start().mt(-4).w(9).h(17).mr(4).flex_none()
         .when(Boolean(l), el => el.border_l(1.5).border_color(t.input))
         .when(l === "└" || l === "├", el => el.border_b(1.5).rounded_bl(6))))
@@ -777,8 +796,36 @@ export default class Agents extends View {
       .child(this.hint({ ...k, status:st }));
   }
 
+  updateCompletion(list, cx, now) {
+    const focus = focused();
+    const active = herdrWindow()?.active && (focus?.shown ?? focus?.terminal);
+    const next = new Map();
+    let earliest = Infinity;
+    this.completionIcons = new Map();
+    for (const agent of list) {
+      const term = this.localAgentTerms.get(agent.address);
+      const key = JSON.stringify([agent.address,term?.created_ms,term?.foreground?.pid]);
+      const state = this.readStates?.get(key) ?? {};
+      const packet = term && childPacketFor(term,this.childPackets,false);
+      const icon = completionIcon(state,{status:agent.status, packet, now, focused:active === agent.address});
+      next.set(key,state);
+      this.completionIcons.set(agent.address,icon);
+      earliest = Math.min(earliest,state.deadline ?? Infinity);
+    }
+    this.readStates = next;
+    if (this.readDeadline === earliest) return;
+    this.readTimer?.cancel();
+    this.readDeadline = earliest;
+    this.readTimer = Number.isFinite(earliest) ? cx.timer.after(Math.max(1,earliest-now), cx => cx.notify()) : null;
+  }
+
+  openTaskRecord(record) {
+    openOverlay({mod:'agents-order',kind:'dialog',width:580,height:420,props:{taskRecord:record}});
+  }
+
   render(cx) {
     const t = theme();
+    if (props()?.taskRecord) return v_flex().size_full().p(12).gap(8).overflow_y_scrollbar().child(div().font_semibold().child(props().taskRecord.name || '执行记录')).child(div().child(this.recordText));
     if (props()?.rowMenu) return this.rowMenu(t, props().rowMenu);
     if (props()?.sortMenu) return this.sortMenu(t);
     if (props()?.rename) return this.renameView();
@@ -814,17 +861,18 @@ export default class Agents extends View {
     const rest = list.filter((a) => !a.pinned);
     list = [...pinned, ...rest];
     setAgentOrder(list.map((a) => a.address));
-    if (this.mode === "todo") return this.todoShell(t);
-
     this.localAgentTerms = new Map(all.map(t => [t.address,t]));
+    this.updateCompletion(list, cx, now);
+    if (this.mode === "todo") return this.todoShell(t);
     const virtual = new Map();
     if (unified && !collapsed) for (const term of all) {
       const packet = childPacketFor(term,this.childPackets);
-      virtual.set(term.address,visibleChildren(childRows(packet,term.foreground?.pid),term.labels?.['workbench.received.v1'],term,packet));
+      virtual.set(term.address,visibleChildren(childRows(packet,term.foreground?.pid),term.labels?.['workbench.received.v1'],term,packet).filter(child => child.state !== 'completed'));
     }
     const virtualRow = (kid, index, siblings) => {
       const names = {working:'运行中',permission:'待授权',reply:'待回应',review:'待审核',idle:'空闲',blocked:'阻塞',unknown:'状态未知',completed:'本轮已完成'};
       return h_flex().relative().pl(38).pr(8).h(26).flex_none().gap(5).items_center().tooltip(names[kid.state])
+        .when(Boolean(kid.id),el=>el.id('internal-'+kid.id).cursor_pointer().on_click(()=>this.openTaskRecord({name:kid.name,summary:['Codex 内部任务',names[kid.state],kid.model,...(kid.events ?? [])].filter(Boolean).join('\n')})))
         .child(div().absolute().left(17).top(index === 0 ? -4 : 0).bottom(index === siblings.length - 1 ? 12 : 0).w(1).bg(t.border))
         .child(div().absolute().left(17).top(13).w(14).h(1).bg(t.border))
         .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child([kid.name,kid.model].filter(Boolean).join(' · ')))

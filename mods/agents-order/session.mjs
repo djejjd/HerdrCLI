@@ -80,7 +80,7 @@ function probeSession(pid, program) {
   return sessionId ? { sessionId, evidence: 'probe.mjs' } : { reason: 'probe-no-session' };
 }
 
-function verify(terminal, expected) {
+async function verify(terminal, expected) {
   const term = JSON.parse(execFileSync('hc', ['get', terminal], { encoding: 'utf8', timeout: 4000 }));
   const pid = term.foreground?.pid;
   if (!pid) return { ok: false, reason: 'no-pid', terminal };
@@ -89,7 +89,12 @@ function verify(terminal, expected) {
   try {
     if (program === 'omp') found = ompSession(pid);
     else if (program === 'dsh-tui') found = dshSession(pid, term.created_ms);
-    else if (['codex', 'claude', 'opencode'].includes(program)) found = probeSession(pid, program);
+    else if (program === 'codex' && term.labels?.['workbench.footer.binding']) {
+      const {boundSession}=await import('../session-footer/model.js');
+      const started=Math.floor(Date.parse(execFileSync('/bin/ps',['-p',String(pid),'-o','lstart='],{encoding:'utf8',timeout:1000}).trim())/1000);
+      const sessionId=boundSession(term,started);
+      found=sessionId ? {sessionId,evidence:'terminal-session-binding'} : probeSession(pid,program);
+    } else if (['codex','claude', 'opencode'].includes(program)) found = probeSession(pid, program);
     else found = { reason: `unsupported:${program ?? 'unknown'}` };
   } catch (error) {
     return { ok: false, reason: `verify-error:${String(error?.message ?? error).slice(0, 80)}`, terminal };
@@ -105,7 +110,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     console.error('usage: session.mjs verify <terminal> [expectedSessionId]');
     process.exit(2);
   }
-  const result = verify(terminal, expected);
+  const result = await verify(terminal, expected);
   console.log(JSON.stringify(result));
   process.exit(result.ok ? 0 : 1);
 }
