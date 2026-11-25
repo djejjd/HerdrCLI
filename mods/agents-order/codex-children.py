@@ -89,31 +89,6 @@ def latest_state(lines, edge):
     return 'unknown', None
 
 
-def recent_events(path, budget):
-    labels = {'task_started':'开始执行','task_complete':'完成交件','turn_aborted':'执行中断',
-              'exec_command_end':'命令结束','patch_apply_end':'修改文件','agent_message':'回复消息'}
-    events = []
-    try:
-        with open(path,'rb') as stream:
-            for line in rollout_lines(stream,budget):
-                if b'"event_msg"' not in line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except (ValueError, RecursionError):
-                    continue
-                if not isinstance(event,dict) or not isinstance(event.get('payload'),dict):
-                    continue
-                label = labels.get(event['payload'].get('type'))
-                if label:
-                    events.append(str(event.get('timestamp',''))[:19]+' '+label)
-                if len(events) >= 8:
-                    break
-    except (OSError, TypeError):
-        pass
-    return events[::-1]
-
-
 def snapshot(pid, budget=None):
     if budget is None:
         budget = ScanBudget()
@@ -141,8 +116,6 @@ def snapshot(pid, budget=None):
                 state, revision = state_of(path,edge,budget)
                 children.append(dict(id=child_id,name=(name if isinstance(name,str) and name else 'Agent').split('/')[-1],
                                      model=model if isinstance(model,str) else '',state=state,revision=revision))
-            for item, row in zip(children, (row for row in rows if isinstance(row[0],str))):
-                item['events'] = recent_events(row[3],budget)
             return {'stage':'ready',**identity,'parentState':parent_state,'parentRevision':parent_revision,'children':children}
     except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError):
         return {'stage':stage,**identity,'children':[]}
