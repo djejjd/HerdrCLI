@@ -26,3 +26,8 @@ export function visibleChildren(rows, receipt, terminal, snapshot) {
       || ['pending','takeover','recovering'].some(key => lifecycle[key] != null && lifecycle[key] !== false)));
   });
 }
+
+// 两个 mod 在独立运行时加载，同一判定由一致性测试覆盖。
+export function showFooter(address, agents, program) {
+  return !!address && (agents.some(agent => agent.address === address) || /^(codex|claude|omp|opencode|dsh-tui)$/i.test(program ?? ''));
+}

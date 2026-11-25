@@ -1,3 +1,4 @@
+import {shared} from 'herdr';
 import {statusText} from './sidebar-policy.js';
 // 待办视图：标题分段、行、空/错误/冲突态。只消费 todo.js 的视图模型。
 import { div, svg } from "gpui-kit";
@@ -7,7 +8,7 @@ import { h_flex, v_flex } from "gpui-base";
 // blocked/conflict 只用小图标承载错误色；行文字保持正常前景。
 export function statusIcon(state, t) {
   if (state === "working" || state === "operation") {
-    return svg("mods/workspace-chrome/spinner.svg").size(14).flex_none().text_color(t.muted).spin(900);
+    return svg("mods/workspace-chrome/spinner.svg").size(14).flex_none().text_color(t.muted).when(shared("agents-order.motion") === true, el => el.spin(900));
   }
   if (state === "needs_user") return svg("mods/agents-order/user.svg").size(14).flex_none().text_color(t.working);
   if (state === "review") return svg("mods/agents-order/review.svg").size(14).flex_none().text_color(t.accent);
@@ -44,7 +45,7 @@ export function hintView(t, hint, count, open, compact = false) {
 
     .when(!compact && Boolean(hint.text), el => el.child(div().text_size(12).text_color(t.muted).child(hint.text)))
     .child(h_flex().size(20).flex_none().items_center().justify_center().tooltip(statusText(hint.icon))
-      .child(busy ? squareActivity(t) : hint.icon === "completed" ? icon.tooltip("本轮已完成") : icon));
+      .child(busy && shared("agents-order.motion") === true ? squareActivity(t) : hint.icon === "completed" ? icon.tooltip("本轮已完成") : icon));
 }
 
 export function modeHeader(t, detail, back, right) {

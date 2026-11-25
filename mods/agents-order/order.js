@@ -41,22 +41,26 @@ export function releaseTime(drag, previous, now) {
 }
 
 // 每个主行 30px；展开的子行各占 26px，拖动命中按真实行心而非固定索引。
-export function rowCenters(origin, originCenter, children) {
+export function rowCenters(origin, originCenter, children, stride = 30) {
   const centers = new Array(children.length);
   centers[origin] = originCenter;
   for (let i = origin + 1; i < centers.length; i++)
-    centers[i] = centers[i - 1] + 30 + children[i - 1] * 26;
+    centers[i] = centers[i - 1] + stride + children[i - 1] * 26;
   for (let i = origin - 1; i >= 0; i--)
-    centers[i] = centers[i + 1] - 30 - children[i] * 26;
+    centers[i] = centers[i + 1] - stride - children[i] * 26;
   return centers;
 }
 
 export function dropIndex(y, centers) {
-  if (!centers.length) return 0;
-  for (let i = 0; i < centers.length - 1; i++) {
-    if (y < (centers[i] + centers[i + 1]) / 2) return i;
+  let low = 0;
+  let high = Math.max(0, centers.length - 1);
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const boundary = (centers[middle] + centers[middle + 1]) / 2;
+    if (y < boundary) high = middle;
+    else low = middle + 1;
   }
-  return centers.length - 1;
+  return low;
 }
 
 // 预览只计算主行与展开子行的块顶点；不触碰 Space、pane 或 core 顺序。

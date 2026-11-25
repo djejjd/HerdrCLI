@@ -71,6 +71,16 @@ export function modelReadingKey(terminal) {
     ? JSON.stringify([terminal.address, terminal.foreground.pid]) : null;
 }
 
+export function boundSession(terminal, started) {
+  try {
+    const binding = JSON.parse(terminal.labels['workbench.footer.binding']);
+    if (binding.address === terminal.address && binding.created_ms === terminal.created_ms &&
+        binding.pid === terminal.foreground.pid && binding.started === started &&
+        /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(binding.sessionId)) return binding.sessionId;
+  } catch { return null; }
+  return null;
+}
+
 export function rememberModelReading(cache, key, route) {
   if (!key || !route?.model) return;
   cache.delete(key);

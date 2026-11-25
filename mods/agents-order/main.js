@@ -1,3 +1,4 @@
+import {showFooter} from './sidebar-policy.js';
 import {toggleWidth,visibleChildren} from './sidebar-policy.js';
 import { childRows, childReadTargets, updateChildPackets, childPacketFor } from './harness-kids.js';
 import { sidebarIndex, sidebarAgents, needsSinglePane } from "./unified-sidebar-index.js";
@@ -6,7 +7,7 @@ import { sidebarRows } from "./tree-view.js";
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle, InputState, Input } from "gpui-base";
-import { machines, agents, terminals, panes, focused, spaces, run, hc, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window as herdrWindow, layout, checking, home, appHome, readTextFile, exec, notify } from "herdr";
+import { machines, agents, terminals, panes, focused, spaces, run, hc, theme, settings, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window as herdrWindow, layout, checking, home, appHome, readTextFile, exec, notify } from "herdr";
 import { completionIcon } from './completion-read.js';
 import { showGrip, orderedGroup, orderedBySpace, reorderGroup, dragDecision, releaseTime, dropIndex, rowCenters, projectedPositions, persistOrder } from "./order.js";
 import { groupRowItems, rowHint, TodoStore, navigationPlan, preserveSelection, applyModeAction } from "./todo.js";
@@ -102,6 +103,18 @@ function icon(p, size, color) {
 
 export default class Agents extends View {
   init(_props, cx) {
+    if (props()?.taskRecord) {
+      const record = props().taskRecord;
+      this.recordText = record.summary ?? '正在读取执行记录';
+      if (record.address) cx.spawn(async cx => {
+        try {
+          const result = await exec('node',[appHome()+'/mods/agents-order/task-history.mjs','read',record.address],{timeout:4000});
+          this.recordText = result.code === 0 ? JSON.parse(result.stdout) || '暂无执行输出' : '执行记录读取失败';
+        } catch {this.recordText='执行记录读取失败';}
+        if (!this.closed) cx.notify();
+      });
+      return;
+    }
     if (props()?.sortMenu || props()?.rowMenu) return;
     this.closed = false;
     if (props()?.rename) {
@@ -146,11 +159,30 @@ export default class Agents extends View {
     this.todoScroll = ScrollHandle.new();
     this.autoNamePending = new Set();
     this.autoNameTries = new Map();
-    cx.timer.every(30000, (cx) => cx.notify());
+    this.ageTimer = cx.timer.every(30000, (cx) => cx.notify());
     if (!checking()) {
       this.todoTimer = cx.timer.every(2000, (cx) => this.refreshTodo(cx));
       this.refreshTodo(cx);
     }
+  }
+
+  // macOS 的系统偏好在窗口重新激活时刷新；查询失败时使用静态反馈。
+  syncMotionPreference(cx) {
+    const active = globalThis.window?.is_window_active?.() ?? true;
+    if (active === this.motionActive) return;
+    this.motionActive = active;
+    if (!active) return;
+    const request = this.motionRequest = (this.motionRequest ?? 0) + 1;
+    cx.spawn(async () => {
+      let enabled = false;
+      try {
+        const result = await exec('/usr/bin/osascript', ['-l','JavaScript','-e',
+          'ObjC.import("AppKit"); $.NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion'], {timeout:3000});
+        enabled = result.code === 0 && result.stdout.trim() === 'false';
+      } catch { /* 无法读取系统偏好时保留静态提示。 */ }
+      if (!this.closed && request === this.motionRequest && shared('agents-order.motion') !== enabled)
+        setShared('agents-order.motion', enabled);
+    });
   }
 
   focusSession(pane) {
@@ -601,14 +633,16 @@ export default class Agents extends View {
     }
   }
 
-  beginDrag(a, members, index, all, e, cx) {
+  beginDrag(a, members, index, geometry, e, cx) {
     if (this.busy.has(a.space) || members.length < 2) return;
     this.focusHandle.focus();
-    const center = e.position.y - (e.local_position?.y ?? 15) + 15;
-    const children = members.map(m => this.folded.has(m.address) ? 0 : this.tree(all, m.address).length);
+    const zoom = Number(settings().zoom) || 1;
+    const grabOffset = (e.local_position?.y ?? 15 * zoom) / zoom;
+    const center = e.position.y / zoom - grabOffset + 15;
+    const children = members.map(geometry.childCount);
     this.drag = { address: a.address, pane: a.pane, space: a.space, members, origin: index,
       target: index, start: e.position.y, y: e.position.y, valid: true,
-      centers: rowCenters(index, center, children) };
+      zoom, grabOffset, centers: rowCenters(index, center, children, geometry.stride) };
     this.dragTimer?.cancel();
     let ticks = 0;
     this.dragTimer = cx.timer.every(16, cx => {
@@ -628,7 +662,7 @@ export default class Agents extends View {
 
   moveDrag(y, cx) {
     if (!this.drag) return;
-    const target = dropIndex(y, this.drag.centers);
+    const target = dropIndex(y / this.drag.zoom - this.drag.grabOffset + 15, this.drag.centers);
     if (this.drag.y === y && this.drag.target === target) return;
     this.drag.y = y;
     this.drag.target = target;
@@ -642,12 +676,20 @@ export default class Agents extends View {
     cx.notify();
   }
 
-  finishDrag(cx) {
+  finishDrag(cx, event) {
     const d = this.drag;
     if (!d) return;
+    const point = event.position;
+    const bounds = this.rootBounds;
+    if (bounds && (point.x < bounds.x || point.x >= bounds.x + bounds.width || point.y < bounds.y || point.y >= bounds.y + bounds.height)) {
+      this.cancelDrag(cx);
+      return;
+    }
+    this.moveDrag(point.y, cx);
     this.cancelDrag(cx);
     this.lastDragEnd = releaseTime(d, this.lastDragEnd ?? 0, Date.now());
-    const current = new Map(agents().map(a => [a.address, a]));
+    const rows = sidebarAgents(agents(), terminals(), panes(), spaces(), Boolean(props()?.tree));
+    const current = new Map(rows.map(a => [a.address, a]));
     d.valid = (props()?.tree || sortOf().id === "grouped") && d.members.every(a => {
       const live = current.get(a.address);
       return live?.space === d.space && !live.pinned;
@@ -685,6 +727,7 @@ export default class Agents extends View {
   }
 
   close() {
+    this.ageTimer?.cancel();
     this.readTimer?.cancel();
     this.readStates?.clear();
     this.spaceDrag = null;
@@ -766,7 +809,13 @@ export default class Agents extends View {
       .hover((s) => s.bg(t.hover))
       .when(props()?.tree, el => el.on_mouse_down("right", (_e,cx) => { cx.stop_propagation(); this.openRowMenu(k.address); }))
       .when(!props()?.tree, el => el.on_hover((active, cx) => { this.hovered = active ? k.address : null; cx.notify(); }))
-      .on_click(() => (this.listed.has(k.address) ? run("pane.focus", { terminal: k.address }) : this.peek(k.address)))
+      .on_click(() => {
+        if (k.labels?.['workbench.child.kind']==='task') return this.openTaskRecord({address:k.address,name:this.nameById.get(k.address)});
+        const pane = panes().find(item=>item.terminal===k.address);
+        if (pane) return this.focusSession(pane.pane);
+        if (k.labels?.['workbench.child.kind']==='chat') return run('terminal.keep',{terminal:k.address,place:'tab'});
+        this.peek(k.address);
+      })
       .children(s.lines.map(l => div().self_start().mt(-4).w(9).h(17).mr(4).flex_none()
         .when(Boolean(l), el => el.border_l(1.5).border_color(t.input))
         .when(l === "└" || l === "├", el => el.border_b(1.5).rounded_bl(6))))
@@ -801,8 +850,14 @@ export default class Agents extends View {
     this.readTimer = Number.isFinite(earliest) ? cx.timer.after(Math.max(1,earliest-now), cx => cx.notify()) : null;
   }
 
+  openTaskRecord(record) {
+    openOverlay({mod:'agents-order',kind:'dialog',width:580,height:420,props:{taskRecord:record}});
+  }
+
   render(cx) {
     const t = theme();
+    if (props()?.tree && !checking()) this.syncMotionPreference(cx);
+    if (props()?.taskRecord) return v_flex().size_full().p(12).gap(8).overflow_y_scrollbar().child(div().font_semibold().child(props().taskRecord.name || '执行记录')).child(div().child(this.recordText));
     if (props()?.rowMenu) return this.rowMenu(t, props().rowMenu);
     if (props()?.sortMenu) return this.sortMenu(t);
     if (props()?.rename) return this.renameView();
@@ -810,7 +865,17 @@ export default class Agents extends View {
     const collapsed = narrow();
     const sort = sortOf();
     const all = terminals();
-    let list = sidebarAgents(agents(), all, panes(), spaces(), Boolean(props()?.tree));
+    const liveAgents = agents();
+    if (props()?.tree && !checking()) {
+      const focus = focused();
+      const address = focus?.shown ?? focus?.terminal;
+      const visible = showFooter(address, liveAgents, all.find(term => term.address === address)?.foreground?.name);
+      if (this.footerVisible !== visible) {
+        this.footerVisible = visible;
+        run(visible ? 'layout.show' : 'layout.hide', {id:'status'});
+      }
+    }
+    let list = sidebarAgents(liveAgents, all, panes(), spaces(), Boolean(props()?.tree));
     this.listed = new Map(list.map((a) => [a.address, a.status]));
     this.nameById = new Map(all.map(t => [t.address, displayName(t.labels ?? {}, "")]));
     if (!checking()) this.scanAutoNames(all, cx);
@@ -844,15 +909,20 @@ export default class Agents extends View {
     const virtual = new Map();
     if (unified && !collapsed) for (const term of all) {
       const packet = childPacketFor(term,this.childPackets);
-      virtual.set(term.address,visibleChildren(childRows(packet,term.foreground?.pid),term.labels?.['workbench.received.v1'],term,packet));
+      virtual.set(term.address,visibleChildren(childRows(packet,term.foreground?.pid),term.labels?.['workbench.received.v1'],term,packet).filter(child => child.state !== 'completed'));
     }
     const virtualRow = (kid, index, siblings) => {
       const names = {working:'运行中',permission:'待授权',reply:'待回应',review:'待审核',idle:'空闲',blocked:'阻塞',unknown:'状态未知',completed:'本轮已完成'};
       return h_flex().relative().pl(38).pr(8).h(26).flex_none().gap(5).items_center().tooltip(names[kid.state])
+        .when(Boolean(kid.id),el=>el.id('internal-'+kid.id).cursor_pointer().on_click(()=>this.openTaskRecord({name:kid.name,summary:['Codex 内部任务',names[kid.state],kid.model,...(kid.events ?? [])].filter(Boolean).join('\n')})))
         .child(div().absolute().left(17).top(index === 0 ? -4 : 0).bottom(index === siblings.length - 1 ? 12 : 0).w(1).bg(t.border))
         .child(div().absolute().left(17).top(13).w(14).h(1).bg(t.border))
         .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted).child([kid.name,kid.model].filter(Boolean).join(' · ')))
         .child(['unknown','blocked'].includes(kid.state) ? h_flex().size(20).items_center().justify_center().child(kid.state === 'unknown' ? div().w(8).h(1).bg(t.muted) : statusIcon('blocked',t)) : hintView(t,{icon:kid.state},0,{},true));
+    };
+    const geometry = {
+      stride: unified ? 34 : 30,
+      childCount: a => this.folded.has(a.address) ? 0 : this.tree(all, a.address).length + (virtual.get(a.address)?.length ?? 0),
     };
     const withKids = (a, i, members) => {
       const subs = collapsed ? [] : this.tree(all, a.address);
@@ -985,13 +1055,13 @@ export default class Agents extends View {
               else if (this.hoveredHandle === a.address) this.hoveredHandle = null;
               cx.notify();
             })
-            .on_mouse_down("left",(e,cx) => { cx.stop_propagation(); this.beginDrag(a,members,i,all,e,cx); }))
+            .on_mouse_down("left",(e,cx) => { cx.stop_propagation(); this.beginDrag(a,members,i,geometry,e,cx); }))
           .child(showGrip(a, members.length, this.hoveredHandle)
             ? svg("mods/agents-order/grip.svg").size(13).text_color(t.dim) : pic ?? div())))
         .when(!unified && !byPriority && !isPinned && members.length > 1, el => el.child(
           h_flex().id(`drag-${a.address}`).w(17).h_full().flex_none().items_center().justify_center()
             .cursor_grab().tooltip("按住拖动排序")
-            .on_mouse_down("left", (e, cx) => this.beginDrag(a, members, i, all, e, cx))
+            .on_mouse_down("left", (e, cx) => this.beginDrag(a, members, i, geometry, e, cx))
             .child(svg("mods/agents-order/grip.svg").size(13).text_color(t.dim))))
         .when(!unified && Boolean(pic), el => el.child(div().id(`agent-fold-${a.address}`)
           .when(subs.length > 0, el => el.on_click((_e, cx) => {
@@ -1052,7 +1122,7 @@ export default class Agents extends View {
     const groupRows = g => {
       if (byPriority || g.id === "pinned") return g.members.flatMap((a, i) => withKids(a, i, g.members));
       const heights = Object.fromEntries(g.members.map(a => [
-        a.address, 30 + (unified ? 4 : 0) + (this.folded.has(a.address) ? 0 : (this.tree(all, a.address).length + (virtual.get(a.address)?.length ?? 0)) * 26),
+        a.address, geometry.stride + geometry.childCount(a) * 26,
       ]));
       const drag = this.drag?.space === g.members[0]?.space ? this.drag : null;
       const positions = projectedPositions(g.members, drag?.address, drag?.target, heights);
@@ -1061,7 +1131,7 @@ export default class Agents extends View {
       return [v_flex().relative().w_full().h(total)
         .children(g.members.map((a, i) => v_flex().id(`agent-block-${a.address}`)
           .absolute().left(0).right(0).top(positions.get(a.address)).h(heights[a.address])
-          .transition("top", 160).children(withKids(a, i, g.members))))];
+          .when(shared("agents-order.motion") === true, el => el.transition("top", {duration:150,easing:"ease-out"})).children(withKids(a, i, g.members))))];
     };
     const projects = spaces();
     const tree = unified ? sidebarIndex(projects,list,this.rowItems.byAddress,a => this.tree(all,a.address).map(k => k.t)) : null;
@@ -1081,9 +1151,9 @@ export default class Agents extends View {
       .on_mouse_down("left", (e) => { if (e.bounds) this.rootBounds = e.bounds; })
       .on_mouse_move((e, cx) => { if (e.bounds) this.rootBounds = e.bounds; if (this.drag) this.moveDrag(e.position.y, cx); })
       .on_hover((over,cx) => { if (!over && this.spaceDrag) { this.spaceDrag = null; cx.notify(); } })
-      .on_mouse_up("left", (_e, cx) => {
+      .on_mouse_up("left", (e, cx) => {
         if (this.spaceDrag) { this.spaceDrag = null; cx.notify(); }
-        this.finishDrag(cx);
+        this.finishDrag(cx, e);
       })
       .on_mouse_down_out((_e, cx) => { if (this.drag) this.cancelDrag(cx); })
       .on_key_down((e, cx) => { if (e.key === "escape") { this.spaceDrag = null; this.cancelDrag(cx); } })
@@ -1123,10 +1193,10 @@ export default class Agents extends View {
       )
       .when(this.drag, el => el.child(div().id("drag-layer").absolute().inset(0).w_full().h_full()
         .on_mouse_move((e, cx) => this.moveDrag(e.position.y, cx))
-        .on_mouse_up("left", (_e, cx) => this.finishDrag(cx))
+        .on_mouse_up("left", (e, cx) => this.finishDrag(cx, e))
         .on_click((_e, cx) => cx.stop_propagation())
         .child(h_flex().absolute().left(8).right(8)
-          .top(this.drag.y - (this.rootBounds?.y ?? 0) - 15).h(30).px(8).gap(9)
+          .top((this.drag.y - (this.rootBounds?.y ?? 0)) / this.drag.zoom - this.drag.grabOffset).h(30).px(8).gap(9)
           .items_center().rounded(8).bg(t.raised).border_1().border_color(t.accent).shadow_2xl()
           .child(svg("mods/agents-order/grip.svg").size(13).text_color(t.accent))
           .child(div().truncate().text_color(t.foreground).child(detail.get(this.drag.address) ?? "Agent")))));

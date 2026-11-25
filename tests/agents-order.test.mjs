@@ -83,3 +83,32 @@ test('rollback failure remains visible instead of claiming restored order', asyn
   });
   assert.deepEqual(result, { ok: false, failedAt: 'b', rollbackFailed: ['a'] });
 });
+
+test('统一树的拖动命中与包含间距、虚拟子行的实际块高度一致', () => {
+  assert.deepEqual(rowCenters(1, 101, [2, 0, 1], 34), [15, 101, 135]);
+});
+
+test('底栏显隐规则与独立侧栏运行时一致', async () => {
+  const sidebar = await import('../mods/agents-order/sidebar-policy.js');
+  const footer = await import('../mods/session-footer/fee.js');
+  for (const address of [null, 't1', 't2']) {
+    for (const program of [null, 'CODEX', 'claude', 'omp', 'opencode', 'dsh-tui', 'zsh']) {
+      const inputs = [address, [{address:'t2'}], program];
+      assert.equal(sidebar.showFooter(...inputs), footer.showFooter(...inputs));
+    }
+  }
+});
+
+test('长列表跨越和反向查找遵循相邻行中点，比较次数按对数增长', () => {
+  const centers = Array.from({length:8192}, (_, index) => index * 34 + 15);
+  let reads = 0;
+  const counted = new Proxy(centers, {get(target, key) {
+    if (/^\d+$/.test(String(key))) reads++;
+    return target[key];
+  }});
+  for (const index of [8190, 120, 4000, 3]) {
+    assert.equal(dropIndex(centers[index] + 17, counted), index + 1);
+    assert.equal(dropIndex(centers[index] + 16.99, counted), index);
+  }
+  assert.ok(reads <= 8 * 28, `坐标读取 ${reads} 次`);
+});
